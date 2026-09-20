@@ -96,6 +96,8 @@ class Policy:
     channels: dict[str, Channel]
     flavor: str
     day_version: str
+    review_highlights: list[str]
+    review_max: int
 
     @staticmethod
     def load(path: Path | None = None) -> "Policy":
@@ -119,6 +121,10 @@ class Policy:
             channels=channels,
             flavor=str(raw.get("flavor") or default_flavor()),
             day_version=str(raw.get("day-version", "main")),
+            review_highlights=[
+                str(pattern) for pattern in (raw.get("review") or {}).get("highlight-paths", [])
+            ],
+            review_max=int((raw.get("review") or {}).get("max-highlights", 20)),
         )
 
     @property
@@ -169,6 +175,34 @@ class App:
     @property
     def repo_url(self) -> str:
         return f"https://github.com/{self.owner_repo}"
+
+
+def github_api(url: str, timeout: int = 20) -> tuple[int, object]:
+    """Ask GitHub a read-only question.
+
+    Returns the status and the decoded body, or `(0, None)` when the question could not be asked
+    at all. The token is whatever the job holds; every endpoint used here is readable on a public
+    repository without one.
+    """
+    import urllib.error
+    import urllib.request
+
+    request = urllib.request.Request(url, method="GET")
+    request.add_header("Accept", "application/vnd.github+json")
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if token:
+        request.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
+            body = response.read()
+            try:
+                return response.status, json.loads(body)
+            except ValueError:
+                return response.status, None
+    except urllib.error.HTTPError as e:
+        return e.code, None
+    except OSError:
+        return 0, None
 
 
 def relative(path: Path) -> str:
@@ -763,7 +797,8 @@ def cmd_add(args: argparse.Namespace) -> int:
     token = args.token
     path = APPS / f"{token}.yaml"
     if path.exists():
-        Problem(relative(path), f"already exists; `queue.py update {token}` moves it to a newer release").emit()
+        message = f"already exists; `queue.py update {token}` moves it to a newer release"
+        Problem(relative(path), message).emit()
         return 1
     try:
         tag, commit, how = released(token, policy, args.tag)
@@ -838,6 +873,212 @@ def cmd_resolve(args: argparse.Namespace) -> int:
 
 
 # --------------------------------------------------------------------------------------------
+# review
+# --------------------------------------------------------------------------------------------
+
+REVIEW_MARKER = "<!-- appfair-review -->"
+
+
+def previous_submission(base: str, path: Path) -> dict | None:
+    """The submission as it stands on `base`, or None when this pull request adds the file."""
+    out = subprocess.run(
+        ["git", "show", f"{base}:{relative(path)}"], cwd=ROOT, capture_output=True, text=True
+    )
+    if out.returncode != 0:
+        return None
+    try:
+        data = yaml.safe_load(out.stdout)
+    except yaml.YAMLError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def compare_stats(owner_repo: str, base: str, head: str) -> dict | None:
+    """What GitHub says about the range between two commits of an app.
+
+    The counts and the file list come from the compare endpoint, which reads the repository
+    without cloning it. None when GitHub cannot be asked, and the comment then carries the link
+    on its own.
+    """
+    status, payload = github_api(
+        f"https://api.github.com/repos/{owner_repo}/compare/{base}...{head}?per_page=100"
+    )
+    if status != 200 or not isinstance(payload, dict):
+        return None
+    files = [str(f.get("filename", "")) for f in payload.get("files") or []]
+    return {
+        "commits": len(payload.get("commits") or []),
+        "total_commits": int(payload.get("total_commits") or 0),
+        "files": files,
+        "file_count": len(files),
+        "additions": sum(int(f.get("additions") or 0) for f in payload.get("files") or []),
+        "deletions": sum(int(f.get("deletions") or 0) for f in payload.get("files") or []),
+        "status": str(payload.get("status") or ""),
+        "behind_by": int(payload.get("behind_by") or 0),
+    }
+
+
+def highlights(files: list[str], policy: Policy) -> tuple[list[str], int]:
+    """The changed paths policy.yaml asks a reviewer to open first, and how many were left out."""
+    import fnmatch
+
+    # Shallow paths first, so an app's own manifest and build script come before the twelfth
+    # crate's Cargo.toml.
+    picked = sorted(
+        (
+            name
+            for name in files
+            if any(fnmatch.fnmatch(name, pattern) for pattern in policy.review_highlights)
+        ),
+        key=lambda name: (name.count("/"), name),
+    )
+    return picked[: policy.review_max], max(0, len(picked) - policy.review_max)
+
+
+def other_changes(previous: dict, current: dict) -> list[str]:
+    """The keys this pull request changes besides the tag and the commit."""
+    keys = (set(previous) | set(current)) - {"tag", "commit"}
+    return sorted(key for key in keys if previous.get(key) != current.get(key))
+
+
+def review_section(
+    app: App, previous: dict | None, policy: Policy, stats: dict | None, asked: bool = True
+) -> str:
+    """One app's part of the reviewer's comment."""
+    data = app.data
+    url = app.repo_url
+    # The title comes out of the submission, so it is one line and carries no backtick that could
+    # close the code span it lands in.
+    title = " ".join(str(data.get("title", app.token)).split()).replace("`", "'")
+    tag = str(data.get("tag", ""))
+    commit = str(data.get("commit", ""))
+    lines = [f"### {title} — `{app.token}`", ""]
+
+    if previous is None:
+        lines += [
+            f"First submission, at `{tag}`.",
+            "",
+            f"- [The source at that commit]({url}/tree/{commit})",
+            f"- [Release notes for {tag}]({url}/releases/tag/{tag})",
+            "",
+            "No version of this app has been published, so the review covers the repository as a"
+            " whole.",
+        ]
+        return "\n".join(lines)
+
+    was_tag = str(previous.get("tag", ""))
+    was_commit = str(previous.get("commit", ""))
+    changed = other_changes(previous, data)
+
+    if was_commit == commit:
+        lines.append(f"Still at `{tag}`, so the app's source is unchanged.")
+        lines.append("")
+        lines.append(
+            "This pull request changes " + ", ".join(f"`{key}`" for key in changed) + "."
+            if changed
+            else "Nothing in this file changed."
+        )
+        return "\n".join(lines)
+
+    lines += [
+        f"`{was_tag}` → `{tag}`",
+        "",
+        f"- [The source changes between the two commits]"
+        f"({url}/compare/{was_commit}...{commit})",
+        f"- [Release notes for {tag}]({url}/releases/tag/{tag})",
+    ]
+
+    if stats:
+        count = stats["total_commits"] or stats["commits"]
+        lines[-2] += (
+            f" — {count} commit(s), {stats['file_count']} file(s), "
+            f"+{stats['additions']} −{stats['deletions']}"
+        )
+        if stats["file_count"] >= 100:
+            lines[-2] += " (GitHub lists the first 100 files)"
+        picked, rest = highlights(stats["files"], policy)
+        if picked:
+            lines += ["", "Build and packaging files in that range:", ""]
+            lines += [f"- `{name}`" for name in picked]
+            if rest:
+                lines.append(f"- …and {rest} more")
+        # GitHub answers `ahead` when the proposed commit simply continues the published one.
+        # Anything else is worth a reviewer's attention before the range is read.
+        warning = {
+            "diverged": f"**The two commits have diverged.** {stats['behind_by']} commit(s) in"
+            " the published release are missing from this one, so the app's history was"
+            " rewritten or the tag moved to another line of development.",
+            "behind": f"**The proposed commit is {stats['behind_by']} commit(s) behind the"
+            " published one**, so this submission would publish older source than the release"
+            " already out.",
+            "identical": "**The proposed commit is the published one.**",
+        }.get(stats["status"])
+        if warning:
+            lines += ["", warning]
+    elif asked:
+        lines += ["", "GitHub did not answer with the range, so the link above is all there is."]
+
+    if changed:
+        named = ", ".join(f"`{key}`" for key in changed)
+        lines += ["", f"This pull request also changes {named}."]
+    return "\n".join(lines)
+
+
+def review_body(sections: list[str]) -> str:
+    """The comment itself, with the marker the workflow finds it by."""
+    return "\n\n".join(
+        [REVIEW_MARKER, "## What this pull request publishes"]
+        + sections
+        + ["*Rewritten on every push to this pull request.*"]
+    ) + "\n"
+
+
+def cmd_review(args: argparse.Namespace) -> int:
+    """Write the reviewer's summary of the submissions a pull request changes.
+
+    For an update this is the range between the commit that is published and the one being
+    proposed, so the source changes can be read before the submission is approved.
+    """
+    policy = Policy.load()
+    base = args.changed_from or "origin/main"
+    if args.app:
+        paths = [p for p in (APPS / f"{args.app}.yaml", APPS / f"{args.app}.yml") if p.exists()]
+    else:
+        paths = [
+            ROOT / f
+            for f in (args.changed or changed_files(base))
+            if f.startswith("apps/") and f.endswith((".yaml", ".yml")) and (ROOT / f).exists()
+        ]
+    apps = [load_app(p) for p in sorted(set(paths))]
+    apps = [app for app in apps if app.data]
+    if not apps:
+        print("no submission changed, so there is nothing to summarize")
+        return 0
+
+    sections = []
+    for app in apps:
+        previous = previous_submission(base, app.path)
+        stats = None
+        was_commit = str((previous or {}).get("commit", ""))
+        commit = str(app.data.get("commit", ""))
+        if previous and was_commit and commit and was_commit != commit and not args.offline:
+            stats = compare_stats(app.owner_repo, was_commit, commit)
+        sections.append(review_section(app, previous, policy, stats, asked=not args.offline))
+
+    body = review_body(sections)
+    if args.out:
+        Path(args.out).write_text(body)
+        print(f"wrote    {args.out}")
+    step_summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if step_summary:
+        with open(step_summary, "a") as fh:
+            fh.write(body + "\n")
+    if not args.out:
+        print(body)
+    return 0
+
+
+# --------------------------------------------------------------------------------------------
 # authorize
 # --------------------------------------------------------------------------------------------
 
@@ -851,26 +1092,11 @@ def cmd_authorize(args: argparse.Namespace) -> int:
     Prints a warning and exits 0. The reviewer who merges decides; someone other than the
     maintainer may legitimately bump a tag, and the warning puts that in the thread.
     """
-    import json as _json
-    import urllib.error
-    import urllib.request
-
     actor = (args.actor or "").lstrip("@")
 
     def ask(url: str) -> int:
         """The status GitHub answers with, or 0 when the question could not be asked."""
-        request = urllib.request.Request(url, method="GET")
-        request.add_header("Accept", "application/vnd.github+json")
-        token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
-        if token:
-            request.add_header("Authorization", f"Bearer {token}")
-        try:
-            with urllib.request.urlopen(request, timeout=20) as response:  # noqa: S310
-                return response.status
-        except urllib.error.HTTPError as e:
-            return e.code
-        except OSError:
-            return 0
+        return github_api(url)[0]
 
     for token_name in args.apps:
         app = next((a for a in catalog() if a.token == token_name), None)
@@ -1626,8 +1852,8 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
     raw = load_yaml(ROOT / "policy.yaml")
     required = [
         "id-namespace", "token-pattern", "tag-pattern", "commit-pattern", "channels",
-        "day-version", "ignore-in-comparison", "mismatch", "override-label", "virus-scan",
-        "baseline-permissions", "app-data-paths",
+        "day-version", "review", "ignore-in-comparison", "mismatch", "override-label",
+        "virus-scan", "baseline-permissions", "app-data-paths",
     ]
     missing = [key for key in required if key not in raw]
     if missing:
@@ -1665,6 +1891,48 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
     else:
         failures += 1
         print("FAIL an update lost the file around the two lines it changes")
+
+    # The reviewer's comment: an update names both commits, a first submission says there is
+    # nothing to compare against, and a highlighted path is one a reviewer should open.
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "Faire-Games.yaml"
+        previous = yaml.safe_load(GOOD)
+        proposed = GOOD.replace("tag: v1.9.0", "tag: v2.0.1")
+        proposed = proposed.replace(str(previous["commit"]), "b" * 40)
+        path.write_text(proposed)
+        app = load_app(path)
+        stats = {
+            "commits": 4, "total_commits": 4, "files": ["build.rs", "src/main.rs"],
+            "file_count": 2, "additions": 62, "deletions": 78, "status": "ahead", "behind_by": 0,
+        }
+        section = review_section(app, previous, policy, stats)
+        wanted = [
+            f"{previous['commit']}..." + "b" * 40,
+            "`v1.9.0` → `v2.0.1`",
+            "4 commit(s), 2 file(s), +62 −78",
+            "`build.rs`",
+        ]
+        missing = [w for w in wanted if w not in section]
+        if missing:
+            failures += 1
+            print(f"FAIL the reviewer's comment is missing: {missing}")
+        elif "src/main.rs" in section:
+            failures += 1
+            print("FAIL the reviewer's comment lists a path policy.yaml does not highlight")
+        else:
+            print("ok   the reviewer's comment names both commits and the files to open first")
+        first = review_section(app, None, policy, None)
+        if "First submission" in first and "compare" not in first:
+            print("ok   a first submission has nothing to compare against")
+        else:
+            failures += 1
+            print("FAIL a first submission was given a comparison")
+        same = review_section(app, app.data, policy, None)
+        if "unchanged" in same:
+            print("ok   a submission that keeps its commit says the source is unchanged")
+        else:
+            failures += 1
+            print("FAIL a re-pinned submission claimed a source change")
 
     # The flavor follows this catalog's name, so a fork builds its own without editing anything.
     expected = ROOT.name.removesuffix("-apps")
@@ -1716,6 +1984,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--changed", nargs="*", help="explicit changed paths, in place of a git diff")
     p.add_argument("--app", help="one token, in place of a git diff")
     p.set_defaults(func=cmd_plan)
+
+    p = sub.add_parser("review", help="summarize the source changes a submission proposes")
+    p.add_argument("--changed-from", help="git ref to diff against (default: origin/main)")
+    p.add_argument("--changed", nargs="*", help="explicit changed paths, in place of a git diff")
+    p.add_argument("--app", help="one token, in place of a git diff")
+    p.add_argument("--out", help="where to write the comment (default: stdout)")
+    p.add_argument("--offline", action="store_true", help="skip the counts GitHub would supply")
+    p.set_defaults(func=cmd_review)
 
     p = sub.add_parser("verify", help="check a submission against the app it points at")
     p.add_argument("--app", required=True, help="the app token")

@@ -78,6 +78,40 @@ complete.
 re-signs a package without rebuilding it, and uploads through the fastlane lanes `day store stage`
 generates from the app's listing.
 
+## The reviewer's comment
+
+A submission that updates an app moves two lines: its `tag` and its `commit`. The checks turn that
+into the range between the commit already published and the one proposed, and post it on the pull
+request:
+
+> ### Fair Games — `Faire-Games`
+>
+> `v2.0.0` → `v2.0.1`
+>
+> - [The source changes between the two commits](#) — 4 commit(s), 21 file(s), +62 −78
+> - [Release notes for v2.0.1](#)
+>
+> Build and packaging files in that range:
+>
+> - `Cargo.toml`
+> - `build.rs`
+> - `.github/workflows/ci.yml`
+
+`policy.yaml: review.highlight-paths` decides which paths are listed: what runs during a build,
+what pulls in a dependency, and what sets the app's identity or permissions. A first submission
+gets a link to the source at the commit instead, since there is nothing to compare against. When
+the proposed commit is not a continuation of the published one, the comment says so, with how far
+the two have diverged.
+
+The comment is rewritten on each push, so the thread holds the current range rather than a
+history of every force-push. `scripts/queue.py review --app <token> --offline` prints the same
+text locally.
+
+Posting it is a separate workflow (`comment.yml`). A pull request opened from a fork gets a
+read-only token, so the run that writes the summary cannot post it; `comment.yml` runs afterwards
+from the default branch, downloads the summary and comments. It checks out nothing from the
+submission.
+
 ## What each side supplies
 
 **The maintainer** supplies a public Day project with a release tag, an App Fair flavor carrying
@@ -131,6 +165,7 @@ python3 scripts/queue.py selftest               # the rules against their own ca
 python3 -m unittest discover -s scripts -p 'test_*.py'
 python3 scripts/queue.py wiring                 # every workflow against the actions it calls
 python3 scripts/queue.py plan --app Faire-Games # what the workflows would build
+python3 scripts/queue.py review --app Faire-Games --offline   # the reviewer's comment
 python3 scripts/queue.py resolve --token Faire-Games --tag v2.0.1
 python3 scripts/queue.py add Faire-Games
 python3 scripts/queue.py update Faire-Games
@@ -196,6 +231,10 @@ Four settings are not in any file:
   or drop the job and read the state from the run.
 - **An `allow-mismatch` label**, named in `policy.yaml`. A maintainer applies it to a pull request
   whose comparison cannot pass for a known reason.
+- **Write access for workflows.** Under *Settings → Actions → General*, "Workflow permissions"
+  must allow the `GITHUB_TOKEN` to write, so `comment.yml` can post the reviewer's summary.
+  GitHub runs a `workflow_run` workflow from the default branch, so the comment appears once
+  `comment.yml` is on `main`.
 
 `workflow_dispatch` on the publish workflow republishes any app by token after a store-side
 failure, without a new commit.
@@ -206,13 +245,14 @@ failure, without a new commit.
 apps/<token>.yaml                one metadata file per app
 policy.yaml                      channels, submission rules, and stage B's settings
 schema/app.schema.json           the same shape, for editors
-scripts/queue.py                 add, update, validate, plan, verify, inspect, compare, audit,
-                                 authorize, wiring, record, resolve, selftest
+scripts/queue.py                 add, update, validate, plan, review, verify, inspect, compare,
+                                 audit, authorize, wiring, record, resolve, selftest
 scripts/signing_inputs.py        credential normalization for the signing stage
 scripts/package_compare.py       the package comparison stage B runs
 state/published.json             what has been published, written by the publish workflow
 .github/actions/build-app        stage A
 .github/actions/validate-package stage B
 .github/actions/sign-submit      stage C
-.github/workflows/               checks, pr (A + B), publish (A + B + C + record)
+.github/workflows/               checks, pr (A + B), publish (A + B + C + record),
+                                 comment (the reviewer's summary)
 ```

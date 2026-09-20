@@ -70,6 +70,30 @@ jobs:
           # shellcheck disable=SC2086 # a deliberately word-split token list
           python3 scripts/queue.py authorize $TOKENS \
             --actor "${{ github.event.pull_request.user.login }}"
+      # What a reviewer needs to read before approving: the range between the commit that is
+      # published and the one this pull request proposes. The comment itself is posted by
+      # comment.yml, because a pull request from a fork gets a read-only token here.
+      - name: Summarize the source changes for a reviewer
+        if: steps.plan.outputs.count != '0'
+        # The summary is for the reviewer to read, so a failure to write it leaves the checks
+        # alone.
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 scripts/queue.py review --changed-from "origin/${{ github.base_ref }}" \
+            --out review.md
+          echo "${{ github.event.pull_request.number }}" > review-pr.txt
+      - name: Keep the summary for the comment job
+        if: steps.plan.outputs.count != '0'
+        uses: actions/upload-artifact@v7
+        with:
+          name: review-comment
+          path: |
+            review.md
+            review-pr.txt
+          if-no-files-found: ignore
       # The label that lets a submission past a comparison it cannot pass. A maintainer adds it
       # after finding out why the two builds differ, and the run records that it was used.
       - name: Was the comparison waived?

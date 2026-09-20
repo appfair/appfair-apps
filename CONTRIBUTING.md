@@ -166,10 +166,14 @@ A pull request runs the stages a merge runs, stopping before the signing.
    excludes the source. `day metadata --json` must report `org.appfair.app.<token>`, a version
    matching the tag, and the targets the file asks for, and the tag must still point at the pinned
    commit.
-4. **The build** (stage A): `day lint`, then `day pack --no-sign` for each target. This is the only
+4. **The reviewer's comment**: for an update, the range between the commit already published and
+   the one this pull request proposes, with the number of commits and files, the build and
+   packaging files inside it, and a link to read it on GitHub. A first submission gets a link to
+   the source at its commit. The comment is rewritten on every push.
+5. **The build** (stage A): `day lint`, then `day pack --no-sign` for each target. This is the only
    stage that runs code from the app, and it holds no credentials, so a pull request cannot
    publish anything or reach a key.
-5. **The validation** (stage B), on a runner that never saw the app's source:
+6. **The validation** (stage B), on a runner that never saw the app's source:
 
    | check | what fails it |
    |---|---|
@@ -227,6 +231,10 @@ Run `scripts/queue.py update <token>`. By hand it is two lines:
 Everything else follows from the app's repository at the new commit. An app that changes its title
 changes this file too, since the uniqueness rule applies to the displayed title.
 
+The checks comment on the pull request with the range between the two commits, so the reviewer
+reads the source changes going into the release. Release notes on the tag are the other half of
+that: a release with no notes leaves the reviewer reading commits.
+
 ## When something fails
 
 | where | what to do |
@@ -244,6 +252,7 @@ changes this file too, since the uniqueness rule applies to the displayed title.
 ```sh
 python3 scripts/queue.py add Faire-Games          # or `update Faire-Games`
 python3 scripts/queue.py validate apps/Faire-Games.yaml
+python3 scripts/queue.py review --app Faire-Games --offline
 python3 scripts/queue.py selftest
 python3 scripts/queue.py wiring
 ```

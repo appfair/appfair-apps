@@ -63,6 +63,35 @@ channels:
 # Which day CLI builds every submission. `main` tracks the framework; a released version pins it.
 day-version: main
 
+# --- The reviewer's summary ------------------------------------------------------------------
+# An update moves the tag and the commit a submission pins. The pull-request checks work out the
+# range between the commit already published and the proposed one, and post it as a comment, so a
+# reviewer can read the source changes going into the release before approving it.
+review:
+  # Paths worth opening first in that range: what runs during a build, what pulls in a dependency,
+  # and what decides the app's identity or permissions. Anything matching is listed in the
+  # comment; everything else is behind the compare link. Patterns are matched with fnmatch, where
+  # `*` also crosses directory separators.
+  highlight-paths:
+    - "Cargo.toml"
+    - "*/Cargo.toml"
+    - "Cargo.lock"
+    - "*build.rs"
+    - "Day.toml"
+    - "Day-*.toml"
+    - ".cargo/*"
+    - ".github/workflows/*"
+    - "*.gradle"
+    - "*.gradle.kts"
+    - "*AndroidManifest.xml"
+    - "*Info.plist"
+    - "*.entitlements"
+    - "*.pbxproj"
+    - "*Package.swift"
+    - "*.sh"
+  # How many of those paths the comment lists before it says how many are left.
+  max-highlights: 20
+
 # App Store provisioning profiles are issued per bundle id. The signing stage requests one during
 # the run with `fastlane sigh`, against the certificate that will sign the package, so none are
 # stored here. An app that needs a particular profile names the secret holding it in its own
