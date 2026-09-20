@@ -14,7 +14,7 @@ Specialized templates, if you prefer one:
 - **Token:** <!-- Faire-Games -->
 - **Title:** <!-- Fair Games -->
 - **Repository and tag:** <!-- https://github.com/Faire-Games/Faire-Games at v1.9.0 -->
-- **Stores:** <!-- App Store, Google Play -->
+- **Channels:** <!-- apple-app-store, google-play-store -->
 
 ## What this changes
 
@@ -32,7 +32,8 @@ Specialized templates, if you prefer one:
 - [ ] The app is free of advertising, tracking, analytics, gambling and cryptocurrency.
 - [ ] The store listing in the app's repository (`store/`, or the flavor's `store-<name>/`) is
       current: title, description, keywords, screenshots, release notes.
-- [ ] I am listed in `maintainers` for this app, or this is a first submission and I maintain it.
+- [ ] I maintain this app — I have write access to its repository, or its maintainers know this
+      submission is coming.
 
 ## For a first submission
 

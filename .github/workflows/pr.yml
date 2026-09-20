@@ -52,13 +52,15 @@ jobs:
           set -euo pipefail
           git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
           python3 scripts/queue.py plan --changed-from "origin/${{ github.base_ref }}"
-      # Who is asking. This prints a warning and passes: the reviewer who merges decides, and an
-      # app changing hands or a maintainer stepping in are ordinary events. The warning puts the
-      # question in the thread, where a reviewer can settle it.
-      - name: Is this the app's maintainer?
+      # Who is asking. Who maintains an app is a fact about that app's repository, so this asks
+      # GitHub rather than reading a list from this one. It prints a warning and passes: the
+      # reviewer who merges decides, and an app changing hands or a maintainer stepping in are
+      # ordinary events. The warning puts the question in the thread, where it can be settled.
+      - name: Does the author maintain the app?
         if: steps.plan.outputs.count != '0'
         env:
           MATRIX: ${{ steps.plan.outputs.matrix }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           TOKENS=$(python3 -c "
@@ -68,8 +70,7 @@ jobs:
           [ -n "$TOKENS" ] || exit 0
           # shellcheck disable=SC2086 # a deliberately word-split token list
           python3 scripts/queue.py authorize $TOKENS \
-            --actor "${{ github.event.pull_request.user.login }}" \
-            --base "origin/${{ github.base_ref }}"
+            --actor "${{ github.event.pull_request.user.login }}"
       # The label that lets a submission past a comparison it cannot pass. A maintainer adds it
       # after finding out why the two builds differ, and the run records that it was used.
       - name: Was the comparison waived?

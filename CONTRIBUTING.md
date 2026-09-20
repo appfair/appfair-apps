@@ -73,18 +73,15 @@ repo: https://github.com/Faire-Games/Faire-Games   # required
 tag: v1.9.0                                        # required
 flavor: appfair                                    # optional
 summary: Classic puzzle and arcade games, offline. # optional
-targets: [ios-uikit, android-mdc]                  # required
-maintainers: [marcprux]                            # required
 
-stores:                                            # required: at least one true
-  apple: true
-  play: true
+distribution:                                      # required
+  ios-uikit:
+    - apple-app-store
+  android-mdc:
+    - google-play-store
 
-apple:                                             # optional
+apple-app-store:                                   # optional, per channel
   profile-secret: IOS_PROFILE_FAIRE_GAMES_B64
-  submit: false
-
-play:                                              # optional
   submit: false
 ```
 
@@ -96,11 +93,30 @@ play:                                              # optional
 | `tag` | The released tag to build, `vX.Y.Z`. What is published has to be what the maintainer released, and it has to still be there later. |
 | `flavor` | The Day flavor carrying the App Fair identity. Leave it out when the app's `Day.toml` already builds under `org.appfair.app.<token>`. |
 | `summary` | One line for people reading the catalog. The store listing is the app's own. |
-| `targets` | What is built and submitted: `ios-uikit`, `android-mdc`, or both. Each needs its store turned on. |
-| `maintainers` | The GitHub accounts that may change this file, with the `@` left off. The first is the maintainer of record. |
-| `stores.apple` / `stores.play` | Which stores this app is published to. |
-| `apple.profile-secret` | The NAME of the repository secret holding this app's App Store provisioning profile, when it has one of its own. The value belongs in the secret. |
-| `apple.submit` / `play.submit` | Ask for App Review, or promote to production, on top of uploading. They default to `false`, which suits a queue where publishing a binary and asking a store to review it are two decisions. |
+| `distribution` | Where the app goes, under the target that builds for it. Each target is built once, and each channel under it is a submission. |
+| `<channel>` | Settings for one channel, under its own name, for a channel `distribution` sends this app to. |
+
+### The channels
+
+`policy.yaml` declares them, and this is what it holds today:
+
+| channel | target | what it does | settings |
+|---|---|---|---|
+| `apple-app-store` | `ios-uikit` | uploads to App Store Connect | `submit`, `profile-secret` |
+| `google-play-store` | `android-mdc` | uploads to the Play internal track | `submit` |
+| `altstore`, `f-droid`, `samsung-galaxy-store` | | declared and on the way; a submission naming one is told so | |
+
+`submit` defaults to `false`: the build is uploaded and stops there, since publishing a binary and
+asking a store to review it are two decisions. Setting it to `true` runs the lane that asks for
+review, or on Play promotes to production.
+
+`profile-secret` names the repository secret holding this app's App Store provisioning profile,
+for an app that needs one of its own. Apple issues a profile per bundle id, and the catalog's
+shared secret is the default.
+
+Adding a channel to the catalog is an entry in `policy.yaml`, a property in
+`schema/app.schema.json`, and an arm in `.github/actions/sign-submit`. The selftest checks that the
+first two agree.
 
 The file is strict: an unknown key is an error, because a key nobody reads is a rule nobody
 applied. `policy.yaml` holds the patterns and lists the checks use, and editing it is how the
@@ -109,14 +125,20 @@ catalog changes what it accepts.
 An editor that understands `# yaml-language-server: $schema=` completes and checks the file from
 `schema/app.schema.json`; the line at the top of every submission points at it.
 
+There is no maintainer list here. Who maintains an app is a fact about the app's own repository,
+so the checks ask GitHub: a pull request from someone with write access to it, or a public member
+of its organization, passes quietly, and anything else leaves a warning for the reviewer to settle
+in the thread. A list in this repository would go stale the day a maintainer changed, and nothing
+here could tell.
+
 ## What the checks do
 
 Opening a pull request runs the stages a merge will run, stopping before the signing:
 
 1. **The rules against themselves** (`scripts/queue.py selftest`), so a change to the checks is
    itself checked.
-2. **The file** — the shape above, the namespace, the tag pattern, the store and target pairing,
-   and the title's uniqueness across the catalog.
+2. **The file** — the shape above, the namespace, the tag pattern, the channels and the targets
+   they take their packages from, and the title's uniqueness across the catalog.
 3. **The app against the file** — the tag's manifest is read on its own, through a sparse checkout
    that leaves the source behind. `day metadata --json` has to report `org.appfair.app.<token>`, a
    version matching the tag, and the targets the file asks for.

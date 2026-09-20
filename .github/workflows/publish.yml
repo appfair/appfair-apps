@@ -40,6 +40,7 @@ jobs:
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
       build-matrix: ${{ steps.plan.outputs.build-matrix }}
+      publish-matrix: ${{ steps.plan.outputs.publish-matrix }}
       count: ${{ steps.plan.outputs.count }}
     steps:
       - uses: actions/checkout@v7
@@ -162,7 +163,7 @@ jobs:
   # can reach the secrets, and the only code it runs is the day CLI, fastlane, and the platform's
   # own signing tools working on an archive.
   publish:
-    name: publish ${{ matrix.token }} ${{ matrix.target }}
+    name: publish ${{ matrix.token }} → ${{ matrix.channel }}
     needs: [plan, validate]
     if: needs.plan.outputs.count != '0'
     runs-on: ${{ matrix.runner }}
@@ -171,10 +172,10 @@ jobs:
       contents: read
     strategy:
       fail-fast: false
-      # One store submission at a time, so two merges in a minute cannot race each other into one
+      # One submission at a time, so two merges in a minute cannot race each other into one
       # store record.
       max-parallel: 1
-      matrix: ${{ fromJSON(needs.plan.outputs.build-matrix) }}
+      matrix: ${{ fromJSON(needs.plan.outputs.publish-matrix) }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
@@ -187,9 +188,10 @@ jobs:
           repo: ${{ matrix.repo }}
           ref: ${{ matrix.tag }}
           target: ${{ matrix.target }}
+          channel: ${{ matrix.channel }}
           flavor: ${{ matrix.flavor }}
           day-version: ${{ matrix.day_version }}
-          lane: ${{ matrix.target == 'ios-uikit' && matrix.ios_lane || matrix.play_lane }}
+          lane: ${{ matrix.lane }}
           keystore-b64: ${{ secrets.DAY_ANDROID_KEYSTORE_B64 }}
           key-alias: ${{ secrets.DAY_ANDROID_KEY_ALIAS }}
           keystore-password: ${{ secrets.DAY_KS_PASS }}
@@ -199,7 +201,7 @@ jobs:
           apple-cert-password: ${{ secrets.DAY_APPLE_CERT_PASSWORD }}
           # A provisioning profile is issued per bundle id, so an app may name a secret of its
           # own; the catalog's shared profile is the default.
-          apple-profile-b64: ${{ secrets[matrix.ios_profile_secret] || secrets.DAY_IOS_PROFILE_B64 }}
+          apple-profile-b64: ${{ matrix.profile_secret != '' && secrets[matrix.profile_secret] || secrets.DAY_IOS_PROFILE_B64 }}
           asc-key-id: ${{ secrets.DAY_ASC_KEY_ID }}
           asc-issuer: ${{ secrets.DAY_ASC_ISSUER }}
           asc-key-b64: ${{ secrets.DAY_ASC_KEY_B64 }}
@@ -225,15 +227,10 @@ jobs:
       - name: Write the publication into state/published.json
         run: |
           set -euo pipefail
-          STORES=""
-          # Full `if` statements: under `set -e` a bare `cond && action` whose condition is false
-          # ends the step, and nothing would be written.
-          if [ "${{ matrix.upload_ios }}" = true ]; then STORES="apple"; fi
-          if [ "${{ matrix.upload_play }}" = true ]; then STORES="${STORES:+$STORES,}play"; fi
           python3 scripts/queue.py record \
             --app "${{ matrix.token }}" \
             --tag "${{ matrix.tag }}" \
-            --stores "$STORES" \
+            --channels "${{ matrix.channels }}" \
             --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
       - name: Commit it
         run: |

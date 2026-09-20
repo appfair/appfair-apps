@@ -5,8 +5,8 @@
 - **Token:** <!-- the app's GitHub organization and repository name; becomes org.appfair.app.<token> -->
 - **Title:** <!-- the name on the home screen and in the store -->
 - **Repository and tag:**
-- **Stores:** <!-- App Store, Google Play, or both -->
-- **Maintainer:** <!-- your GitHub account -->
+- **Channels:** <!-- apple-app-store, google-play-store, or both -->
+- **Maintained by:** <!-- your GitHub account, and the organization the repository is in -->
 
 ## What the app does
 

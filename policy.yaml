@@ -16,11 +16,43 @@ token-pattern: '^[A-Za-z][A-Za-z0-9-]{1,38}$'
 # released, and it has to still be there a year from now.
 tag-pattern: '^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$'
 
-# The targets a submission may ask for. Both stores are here; the catalog's other channels
-# (F-Droid, desktop, web) build from the same tag and go through a different path.
-store-targets:
-  - ios-uikit
-  - android-mdc
+# Where an app can be published, and what each channel is. A submission names its channels under
+# the target that builds for them, so the pairing is part of the file rather than a rule that
+# checks two lists against each other, and a target can feed more than one channel.
+#
+#   target        the Day target whose package this channel takes
+#   lane          the fastlane lane that uploads it
+#   submit-lane   the lane that also asks for review, when a submission sets `submit: true`
+#   options       the settings a submission may give this channel
+#   status        `ready`, or `planned` for a channel the queue knows of and cannot publish to yet
+channels:
+  apple-app-store:
+    target: ios-uikit
+    lane: ios upload
+    submit-lane: ios release
+    options: [submit, profile-secret]
+    status: ready
+  google-play-store:
+    target: android-mdc
+    lane: android upload
+    submit-lane: android release
+    options: [submit]
+    status: ready
+  # The channels the catalog is headed for. A submission naming one of these is told that it is
+  # coming rather than that it is wrong, and turning one on is this entry plus an arm in
+  # .github/actions/sign-submit.
+  altstore:
+    target: ios-uikit
+    options: [submit]
+    status: planned
+  f-droid:
+    target: android-mdc
+    options: []
+    status: planned
+  samsung-galaxy-store:
+    target: android-mdc
+    options: [submit]
+    status: planned
 
 # Which day CLI the queue builds every submission with. `main` tracks the framework; a released
 # version freezes what the catalog builds against.

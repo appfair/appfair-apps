@@ -15,12 +15,16 @@ title: Fair Games
 repo: https://github.com/Faire-Games/Faire-Games
 tag: v1.9.0
 flavor: appfair
-targets: [ios-uikit, android-mdc]
-maintainers: [marcprux]
-stores:
-  apple: true
-  play: true
+distribution:
+  ios-uikit:
+    - apple-app-store
+  android-mdc:
+    - google-play-store
 ```
+
+`distribution` is where the app goes, under the target that builds for it: one build per target,
+one submission per channel, and room for the channels the catalog is headed for (AltStore,
+F-Droid, the Samsung store) as each one gains an arm. `policy.yaml` declares them.
 
 That is the whole submission. Everything else the build needs — the app's name, icon, version,
 permissions, store listing and screenshots — is read out of the app's own repository at that tag,
@@ -131,7 +135,7 @@ belongs to stops and the run says which it was.
 | secret | what it is |
 |---|---|
 | `DAY_APPLE_CERT_P12`, `DAY_APPLE_CERT_PASSWORD` | the iOS distribution certificate stage C signs with |
-| `DAY_IOS_PROFILE_B64` | the App Store provisioning profile; an app with one of its own names a different secret in `apple.profile-secret` |
+| `DAY_IOS_PROFILE_B64` | the App Store provisioning profile; an app with one of its own names a different secret in its `apple-app-store.profile-secret` |
 | `DAY_ASC_KEY_ID`, `DAY_ASC_ISSUER`, `DAY_ASC_KEY_B64` | the App Store Connect API key that uploads and manages listings |
 | `DAY_ANDROID_KEYSTORE_B64`, `DAY_ANDROID_KEY_ALIAS`, `DAY_KS_PASS`, `DAY_KEY_PASS` | the Play upload keystore |
 | `DAY_PLAY_JSON_KEY` | the Google Play service-account key `supply` uploads with |
@@ -164,7 +168,7 @@ by token after a store-side failure, with no new commit.
 
 ```text
 apps/<token>.yaml               one submission per app — the file most pull requests touch alone
-policy.yaml                     what the catalog accepts, and what the validation stage checks
+policy.yaml                     the channels, what the catalog accepts, and what stage B checks
 schema/app.schema.json          the same shape for editors
 scripts/queue.py                validate, plan, verify, authorize, inspect, compare, audit,
                                 wiring, record, selftest — one program, PyYAML its one dependency

@@ -16,7 +16,12 @@ inputs:
     description: The tag being published.
     required: true
   target:
-    description: ios-uikit or android-mdc.
+    description: The Day target whose package this is — ios-uikit or android-mdc.
+    required: true
+  channel:
+    description: >-
+      Where it is going: apple-app-store, google-play-store, or another channel policy.yaml
+      declares. The signing follows the target; the upload follows the channel.
     required: true
   flavor:
     description: The Day build flavor the submission names.
@@ -180,7 +185,7 @@ runs:
         (cd app-data && "$DAY_BIN" --flavor "${{ inputs.flavor }}" store stage)
         find app-data/build/day/store -maxdepth 3 -type d | head -20
 
-    - name: Upload to the store (${{ inputs.lane }})
+    - name: Upload to ${{ inputs.channel }} (${{ inputs.lane }})
       shell: bash
       working-directory: app-data/build/day/store/${{ inputs.target }}
       env:
@@ -192,6 +197,10 @@ runs:
         PLAY_JSON_KEY: ${{ inputs.play-json-key }}
       run: |
         set -euo pipefail
+        case "${{ inputs.channel }}" in
+          apple-app-store|google-play-store) ;;
+          *) echo "::error::${{ inputs.channel }} has no arm here yet — policy.yaml declares it, and this action has to learn it"; exit 1 ;;
+        esac
         if [ -n "${ASC_KEY_B64:-}" ]; then
           echo "$ASC_KEY_B64" | base64 --decode > "$RUNNER_TEMP/asc.p8"
           export DAY_ASC_KEY="$RUNNER_TEMP/asc.p8"
@@ -207,6 +216,6 @@ runs:
     - name: Keep the signed package
       uses: actions/upload-artifact@v7
       with:
-        name: published-${{ inputs.token }}-${{ inputs.target }}
+        name: published-${{ inputs.token }}-${{ inputs.channel }}
         path: ${{ inputs.packages }}
         if-no-files-found: error

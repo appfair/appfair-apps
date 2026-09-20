@@ -38,12 +38,9 @@ APPS = ROOT / "apps"
 STATE = ROOT / "state" / "published.json"
 
 # The keys a submission may carry. Anything else is a typo, and a typo that parsed would be a rule
-# nobody applied.
-TOP_LEVEL = {"token", "title", "repo", "tag", "flavor", "targets", "maintainers", "summary"}
-TABLES = {"stores", "apple", "play"}
-STORE_KEYS = {"apple", "play"}
-APPLE_KEYS = {"profile-secret", "submit"}
-PLAY_KEYS = {"submit"}
+# nobody applied. A channel's own settings live under its name, and policy.yaml says which
+# channels exist and which settings each of them takes.
+TOP_LEVEL = {"token", "title", "repo", "tag", "flavor", "distribution", "summary"}
 
 
 def load_yaml(path: Path) -> dict:
@@ -63,29 +60,65 @@ def load_yaml(path: Path) -> dict:
 
 
 @dataclass
+class Channel:
+    """One place an app can be published, as policy.yaml declares it."""
+
+    name: str
+    target: str
+    lane: str
+    submit_lane: str
+    options: set[str]
+    status: str
+
+    @property
+    def ready(self) -> bool:
+        return self.status == "ready"
+
+
+@dataclass
 class Policy:
     """policy.yaml: what the catalog accepts. Read once, passed everywhere."""
 
     id_namespace: str
     token_pattern: str
     tag_pattern: str
-    store_targets: list[str]
+    channels: dict[str, Channel]
     day_version: str
     default_ios_profile_secret: str
 
     @staticmethod
     def load(path: Path | None = None) -> "Policy":
         raw = load_yaml(path or ROOT / "policy.yaml")
+        channels = {
+            name: Channel(
+                name=name,
+                target=str(spec["target"]),
+                lane=str(spec.get("lane", "")),
+                submit_lane=str(spec.get("submit-lane", spec.get("lane", ""))),
+                options=set(spec.get("options", [])),
+                status=str(spec.get("status", "planned")),
+            )
+            for name, spec in (raw.get("channels") or {}).items()
+        }
         return Policy(
             id_namespace=raw["id-namespace"],
             token_pattern=raw["token-pattern"],
             tag_pattern=raw["tag-pattern"],
-            store_targets=list(raw["store-targets"]),
+            channels=channels,
             day_version=str(raw.get("day-version", "main")),
             default_ios_profile_secret=raw.get(
                 "default-ios-profile-secret", "DAY_IOS_PROFILE_B64"
             ),
         )
+
+    @property
+    def ready_channels(self) -> dict[str, Channel]:
+        return {name: c for name, c in self.channels.items() if c.ready}
+
+    @property
+    def buildable_targets(self) -> list[str]:
+        """The targets at least one channel takes a package from."""
+        return sorted({c.target for c in self.ready_channels.values()})
 
 
 @dataclass
@@ -165,7 +198,8 @@ def validate_app(app: App, policy: Policy, others: list[App] | None = None) -> l
     def bad(message: str) -> None:
         problems.append(Problem(rel, message))
 
-    unknown = set(data) - TOP_LEVEL - TABLES
+    known_channels = policy.channels
+    unknown = set(data) - TOP_LEVEL - set(known_channels)
     if unknown:
         bad(f"unknown key(s): {', '.join(sorted(unknown))}")
 
@@ -204,71 +238,72 @@ def validate_app(app: App, policy: Policy, others: list[App] | None = None) -> l
     elif flavor and not re.match(r"^[A-Za-z0-9_-]+$", flavor):
         bad(f"flavor {flavor!r} is not a flavor name")
 
-    targets = data.get("targets")
-    if not isinstance(targets, list) or not targets:
-        bad(f"targets is required: any of {', '.join(policy.store_targets)}")
-    else:
-        for t in targets:
-            if t not in policy.store_targets:
+    # Where the app goes, and what builds for it. The channels sit under the target whose package
+    # they take, so the pairing is in the file: a channel under the wrong target is an error the
+    # shape catches, and a target can feed more than one channel as the catalog grows.
+    distribution = data.get("distribution")
+    used_channels: list[str] = []
+    if not isinstance(distribution, dict) or not distribution:
+        bad(
+            "distribution is required: the channels this app is published to, under the target "
+            f"that builds for them ({', '.join(policy.buildable_targets)})"
+        )
+        distribution = {}
+    for target, channels in distribution.items():
+        if target not in policy.buildable_targets:
+            bad(
+                f"distribution names the target {target!r}, which no channel takes a package "
+                f"from ({', '.join(policy.buildable_targets)})"
+            )
+            continue
+        if not isinstance(channels, list) or not channels:
+            bad(f"distribution.{target} must list at least one channel")
+            continue
+        for channel in channels:
+            if not isinstance(channel, str) or channel not in known_channels:
                 bad(
-                    f"target {t!r} is outside what this queue builds "
-                    f"({', '.join(policy.store_targets)})"
+                    f"distribution.{target} names {channel!r}, which is not a channel this "
+                    f"catalog knows ({', '.join(sorted(known_channels))})"
                 )
+                continue
+            spec = known_channels[channel]
+            if not spec.ready:
+                bad(
+                    f"{channel} is on the way and cannot be published to yet; the catalog's "
+                    f"channels are {', '.join(sorted(policy.ready_channels))}"
+                )
+                continue
+            if spec.target != target:
+                bad(f"{channel} takes a {spec.target} package, and it is listed under {target}")
+                continue
+            if channel in used_channels:
+                bad(f"{channel} is listed twice")
+                continue
+            used_channels.append(channel)
 
-    maintainers = data.get("maintainers")
-    if not isinstance(maintainers, list) or not maintainers:
-        bad("maintainers is required: the GitHub accounts that may change this file")
-    else:
-        for m in maintainers:
-            if not isinstance(m, str) or not re.match(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$", m):
-                bad(f"maintainer {m!r} is not a GitHub username; leave the @ off")
-
-    stores = data.get("stores", {})
-    if not isinstance(stores, dict):
-        bad("stores must be a mapping")
-        stores = {}
-    unknown = set(stores) - STORE_KEYS
-    if unknown:
-        bad(f"stores: unknown key(s): {', '.join(sorted(unknown))}")
-    for key in STORE_KEYS:
-        if key in stores and not isinstance(stores[key], bool):
-            bad(f"stores.{key} must be true or false")
-    if not any(stores.get(k) is True for k in STORE_KEYS):
-        bad("stores: name at least one store to publish to (apple, play)")
-
-    # A store needs the target that builds for it, and a target needs the store it goes to. When
-    # the two lists disagree, one of them is a mistake.
-    wanted = {"apple": "ios-uikit", "play": "android-mdc"}
-    for store, target in wanted.items():
-        if stores.get(store) is True and isinstance(targets, list) and target not in targets:
-            bad(f"stores.{store} is true, so targets has to include {target}")
-        if stores.get(store) is not True and isinstance(targets, list) and target in targets:
-            bad(f"targets include {target} while stores.{store} is missing or false")
-
-    apple = data.get("apple", {})
-    if not isinstance(apple, dict):
-        bad("apple must be a mapping")
-    else:
-        unknown = set(apple) - APPLE_KEYS
-        if unknown:
-            bad(f"apple: unknown key(s): {', '.join(sorted(unknown))}")
-        if "submit" in apple and not isinstance(apple["submit"], bool):
-            bad("apple.submit must be true or false")
-        secret = apple.get("profile-secret")
+    # A channel's own settings live under its name, and only the channels this app publishes to
+    # may carry them: settings for a channel nobody uses are a rule that does nothing.
+    for name, spec in known_channels.items():
+        if name not in data:
+            continue
+        settings = data[name]
+        if not isinstance(settings, dict):
+            bad(f"{name} must be a mapping of settings")
+            continue
+        if name not in used_channels:
+            bad(f"{name} has settings, and distribution does not send this app there")
+        for key in sorted(set(settings) - spec.options):
+            bad(
+                f"{name}: unknown setting {key!r}"
+                + (f" (it takes {', '.join(sorted(spec.options))})" if spec.options else "")
+            )
+        if "submit" in settings and not isinstance(settings["submit"], bool):
+            bad(f"{name}.submit must be true or false")
+        secret = settings.get("profile-secret")
         if secret is not None and (
             not isinstance(secret, str) or not re.match(r"^[A-Z][A-Z0-9_]*$", secret)
         ):
-            bad("apple.profile-secret takes the NAME of a repository secret; this looks like a value")
-
-    play = data.get("play", {})
-    if not isinstance(play, dict):
-        bad("play must be a mapping")
-    else:
-        unknown = set(play) - PLAY_KEYS
-        if unknown:
-            bad(f"play: unknown key(s): {', '.join(sorted(unknown))}")
-        if "submit" in play and not isinstance(play["submit"], bool):
-            bad("play.submit must be true or false")
+            bad(f"{name}.profile-secret takes the NAME of a repository secret; this looks like a value")
 
     # Two apps sharing a title would be two apps nobody can tell apart in the catalog, and the
     # stores refuse the second one anyway (https://appfair.org/docs/inclusion-criteria/#naming).
@@ -328,13 +363,21 @@ def changed_files(base: str) -> list[str]:
     return [line.strip() for line in out.stdout.splitlines() if line.strip()]
 
 
+def app_channels(app: App, policy: Policy) -> list[tuple[str, Channel]]:
+    """Every (target, channel) this submission publishes to, in the order it lists them."""
+    out: list[tuple[str, Channel]] = []
+    for target, channels in (app.data.get("distribution") or {}).items():
+        for name in channels or []:
+            spec = policy.channels.get(str(name))
+            if spec and spec.ready and spec.target == target:
+                out.append((str(target), spec))
+    return out
+
+
 def matrix_entry(app: App, policy: Policy) -> dict:
-    """One row of the build matrix: everything a reusable workflow call needs, resolved here so
-    the workflow itself stays a list of `with:` lines."""
-    stores = app.data.get("stores", {})
-    apple = bool(stores.get("apple"))
-    play = bool(stores.get("play"))
+    """One row per app: what every stage needs to know about the submission itself."""
     flavor = str(app.data.get("flavor", ""))
+    pairs = app_channels(app, policy)
     return {
         "token": app.token,
         "title": app.data.get("title", app.token),
@@ -345,21 +388,50 @@ def matrix_entry(app: App, policy: Policy) -> dict:
         # The catalog builds the flavor. The app's own build belongs to its repository, and
         # building it here would double every submission.
         "flavors_only": bool(flavor),
-        "targets": ",".join(app.data.get("targets", [])),
-        "upload_ios": "true" if apple else "false",
-        "upload_play": "true" if play else "false",
-        "ios_profile_secret": str(
-            app.data.get("apple", {}).get("profile-secret", policy.default_ios_profile_secret)
-        ),
-        # Which fastlane lane the upload jobs run. `upload` puts the build on the store and stops
-        # there, which suits a queue where publishing a binary and asking a store to review it are
-        # two decisions. `submit: true` in the store's mapping runs the staged `release` lane.
-        "ios_lane": "ios release" if app.data.get("apple", {}).get("submit") else "ios upload",
-        "play_lane": (
-            "android release" if app.data.get("play", {}).get("submit") else "android upload"
-        ),
+        "targets": ",".join(sorted({target for target, _ in pairs})),
+        "channels": ",".join(channel.name for _, channel in pairs),
         "day_version": policy.day_version,
     }
+
+
+def build_rows(entry: dict) -> list[dict]:
+    """One row per target: a build, and the validation of what it produced."""
+    return [
+        dict(
+            entry,
+            target=target,
+            runner="macos-15" if target == "ios-uikit" else "ubuntu-latest",
+        )
+        for target in entry["targets"].split(",")
+        if target
+    ]
+
+
+def publish_rows(app: App, entry: dict, policy: Policy) -> list[dict]:
+    """One row per channel: a signature and an upload, reading the package its target built."""
+    rows = []
+    for target, channel in app_channels(app, policy):
+        settings = app.data.get(channel.name) or {}
+        rows.append(
+            dict(
+                entry,
+                target=target,
+                runner="macos-15" if target == "ios-uikit" else "ubuntu-latest",
+                channel=channel.name,
+                # `upload` puts the build on the channel and stops there, which suits a queue
+                # where publishing a binary and asking a store to review it are two decisions.
+                # `submit: true` under the channel runs the lane that asks for review.
+                lane=channel.submit_lane if settings.get("submit") else channel.lane,
+                # Only a channel that signs with a provisioning profile carries one; the rest
+                # leave the field empty rather than name a secret nothing reads.
+                profile_secret=(
+                    str(settings.get("profile-secret", policy.default_ios_profile_secret))
+                    if "profile-secret" in channel.options
+                    else ""
+                ),
+            )
+        )
+    return rows
 
 
 def cmd_plan(args: argparse.Namespace) -> int:
@@ -385,22 +457,19 @@ def cmd_plan(args: argparse.Namespace) -> int:
 
     entries = [matrix_entry(app, policy) for app in apps]
     matrix = json.dumps({"include": entries}, separators=(",", ":"))
-    # The second matrix is the one the build, validation and publishing stages fan out over: one
-    # row per app per target, since each target is a separate runner and a separate package.
-    builds = [
-        dict(entry, target=target, runner="macos-15" if target == "ios-uikit" else "ubuntu-latest")
-        for entry in entries
-        for target in entry["targets"].split(",")
-        if target
+    # Two more matrices, because the stages fan out differently. A build happens once per target;
+    # a submission happens once per channel, and a target can feed several.
+    builds = [row for entry in entries for row in build_rows(entry)]
+    publishes = [
+        row for app, entry in zip(apps, entries) for row in publish_rows(app, entry, policy)
     ]
     build_matrix = json.dumps({"include": builds}, separators=(",", ":"))
+    publish_matrix = json.dumps({"include": publishes}, separators=(",", ":"))
     summary = [
-        "| app | token | tag | targets | stores |",
+        "| app | token | tag | targets | channels |",
         "|---|---|---|---|---|",
     ] + [
-        f"| {e['title']} | `{e['token']}` | `{e['tag']}` | {e['targets']} | "
-        f"{'App Store ' if e['upload_ios'] == 'true' else ''}"
-        f"{'Google Play' if e['upload_play'] == 'true' else ''} |"
+        f"| {e['title']} | `{e['token']}` | `{e['tag']}` | {e['targets']} | {e['channels']} |"
         for e in entries
     ]
     if not entries:
@@ -411,14 +480,17 @@ def cmd_plan(args: argparse.Namespace) -> int:
         with open(out, "a") as fh:
             fh.write(f"matrix={matrix}\n")
             fh.write(f"build-matrix={build_matrix}\n")
+            fh.write(f"publish-matrix={publish_matrix}\n")
             fh.write(f"count={len(entries)}\n")
             fh.write(f"builds={len(builds)}\n")
+            fh.write(f"publishes={len(publishes)}\n")
     step_summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if step_summary:
         with open(step_summary, "a") as fh:
             fh.write("\n".join(summary) + "\n")
     print(matrix)
     print(build_matrix)
+    print(publish_matrix)
     print("\n".join(summary), file=sys.stderr)
     return 0
 
@@ -494,47 +566,73 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
 
 def cmd_authorize(args: argparse.Namespace) -> int:
-    """Say whether the person proposing a change is one of the app's maintainers.
+    """Say whether the person proposing a change maintains the app it points at.
+
+    Who maintains an app is a fact about that app's repository, so this asks GitHub rather than
+    reading a list somebody typed here: a list would go stale the day a maintainer changed, and
+    nothing in this repository could tell.
 
     It prints a warning and exits 0. The reviewer who merges decides, and there are good reasons
     for someone else to bump a tag: a maintainer stepping in, a security fix, an app changing
     hands. What this adds is that the change says so in the thread.
     """
+    import json as _json
+    import urllib.error
+    import urllib.request
+
     actor = (args.actor or "").lstrip("@")
-    for token in args.apps:
-        # The maintainers as they stand on the base branch, so that a pull request adding its
-        # author to the list cannot authorize itself.
-        maintainers: list[str] = []
-        found = False
-        for name in (f"apps/{token}.yaml", f"apps/{token}.yml"):
-            base = subprocess.run(
-                ["git", "show", f"{args.base}:{name}"],
-                cwd=ROOT,
-                capture_output=True,
-                text=True,
-            )
-            if base.returncode != 0:
-                continue
-            found = True
-            try:
-                data = yaml.safe_load(base.stdout) or {}
-                maintainers = [str(m).lstrip("@") for m in data.get("maintainers", [])]
-            except yaml.YAMLError:
-                maintainers = []
-            break
-        if not found:
-            print(f"ok   {token}: a first submission, from {actor or 'its author'}")
+
+    def ask(url: str) -> int:
+        """The status GitHub answers with, or 0 when the question could not be asked."""
+        request = urllib.request.Request(url, method="GET")
+        request.add_header("Accept", "application/vnd.github+json")
+        token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+        if token:
+            request.add_header("Authorization", f"Bearer {token}")
+        try:
+            with urllib.request.urlopen(request, timeout=20) as response:  # noqa: S310
+                return response.status
+        except urllib.error.HTTPError as e:
+            return e.code
+        except OSError:
+            return 0
+
+    for token_name in args.apps:
+        app = next((a for a in catalog() if a.token == token_name), None)
+        if app is None:
+            Problem("apps", f"no submission named {token_name!r} in apps/").emit()
             continue
-        if actor and actor in maintainers:
-            print(f"ok   {token}: {actor} is a maintainer")
+        owner, _, name = app.owner_repo.partition("/")
+        if not actor:
+            print(f"ok   {token_name}: no author to check")
+            continue
+
+        # An app kept under someone's own account has one maintainer, and the repository says so.
+        if owner.lower() == actor.lower():
+            print(f"ok   {token_name}: {actor} owns {app.owner_repo}")
+            continue
+
+        # Write access to the app's repository is the real answer, and only a token with that
+        # access can read it. Public membership of the app's organization is the one a queue can
+        # always ask about, so it is what this reports.
+        status = ask(f"https://api.github.com/repos/{owner}/{name}/collaborators/{actor}")
+        if status == 204:
+            print(f"ok   {token_name}: {actor} has write access to {app.owner_repo}")
+            continue
+        status = ask(f"https://api.github.com/orgs/{owner}/public_members/{actor}")
+        if status == 204:
+            print(f"ok   {token_name}: {actor} is a public member of {owner}")
+            continue
+        if status == 0:
+            print(f"note {token_name}: GitHub could not be asked who maintains {app.owner_repo}")
             continue
         message = (
-            f"{actor or 'the author'} is outside the maintainers list for {token} "
-            f"({', '.join(maintainers) or 'nobody listed'}); a reviewer should confirm this change "
-            f"with them before merging"
+            f"{actor} is neither a public member of {owner} nor a collaborator this queue can "
+            f"see on {app.owner_repo}; a reviewer should confirm this change with whoever "
+            f"maintains it"
         )
         if os.environ.get("GITHUB_ACTIONS"):
-            print(f"::warning file=apps/{token}.yaml::{message}")
+            print(f"::warning file=apps/{token_name}.yaml::{message}")
         else:
             print(message, file=sys.stderr)
     return 0
@@ -556,12 +654,13 @@ def cmd_record(args: argparse.Namespace) -> int:
     if STATE.exists():
         state = json.loads(STATE.read_text())
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    policy = Policy.load()
     state.setdefault("apps", {})[app.token] = {
         "title": app.data.get("title", app.token),
-        "id": f"{Policy.load().id_namespace}{app.token}",
+        "id": f"{policy.id_namespace}{app.token}",
         "repo": app.data.get("repo", ""),
         "tag": args.tag or app.data.get("tag", ""),
-        "stores": sorted(s for s in (args.stores or "").split(",") if s),
+        "channels": sorted(c for c in (args.channels or "").split(",") if c),
         "published": now,
         "run": args.run_url or "",
     }
@@ -1086,11 +1185,11 @@ title: Fair Games
 repo: https://github.com/Faire-Games/Faire-Games
 tag: v1.9.0
 flavor: appfair
-targets: [ios-uikit, android-mdc]
-maintainers: [marcprux]
-stores:
-  apple: true
-  play: true
+distribution:
+  ios-uikit:
+    - apple-app-store
+  android-mdc:
+    - google-play-store
 """
 
 CASES: list[tuple[str, str, str]] = [
@@ -1103,22 +1202,31 @@ CASES: list[tuple[str, str, str]] = [
         "GitHub repository URL",
     ),
     (
-        "a target this queue leaves out",
-        "targets: [ios-uikit, android-mdc]|targets: [ios-uikit, macos-appkit]",
-        "outside what this queue builds",
+        "a target nothing takes a package from",
+        "  ios-uikit:\n    - apple-app-store|  macos-appkit:\n    - apple-app-store",
+        "which no channel takes a package from",
     ),
     (
-        "a store with no target",
-        "targets: [ios-uikit, android-mdc]|targets: [ios-uikit]",
-        "targets has to include android-mdc",
+        "a channel the catalog does not know",
+        "    - google-play-store|    - amazon-appstore",
+        "not a channel this catalog knows",
     ),
-    ("no maintainer", "maintainers: [marcprux]|maintainers: []", "maintainers is required"),
-    ("an @ on a maintainer", "maintainers: [marcprux]|maintainers: ['@marcprux']", "leave the @ off"),
     (
-        "no store at all",
-        "  apple: true\\n  play: true|  apple: false\\n  play: false",
-        "at least one store",
+        "a channel that is still on the way",
+        "    - google-play-store|    - f-droid",
+        "on the way and cannot be published to yet",
     ),
+    (
+        "a channel under the wrong target",
+        "  android-mdc:\n    - google-play-store|  android-mdc:\n    - apple-app-store",
+        "takes a ios-uikit package",
+    ),
+    (
+        "a target with no channel at all",
+        "  android-mdc:\n    - google-play-store|  android-mdc: []",
+        "must list at least one channel",
+    ),
+    ("nowhere to publish", "distribution:|distributions:", "distribution is required"),
     ("a key nobody reads", "flavor: appfair|flavour: appfair", "unknown key"),
     (
         "a title longer than the store takes",
@@ -1126,9 +1234,19 @@ CASES: list[tuple[str, str, str]] = [
         "30",
     ),
     (
+        "a setting a channel does not take",
+        "flavor: appfair|flavor: appfair\ngoogle-play-store:\n  profile-secret: SOME_SECRET",
+        "unknown setting",
+    ),
+    (
         "a secret's value where its name belongs",
-        "flavor: appfair|flavor: appfair\\napple:\\n  profile-secret: MIIKmAIBAz",
+        "flavor: appfair|flavor: appfair\napple-app-store:\n  profile-secret: MIIKmAIBAz",
         "NAME of a repository secret",
+    ),
+    (
+        "settings for a channel this app does not use",
+        "flavor: appfair|flavor: appfair\naltstore:\n  submit: true",
+        "distribution does not send this app there",
     ),
 ]
 
@@ -1169,23 +1287,32 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
     # to name the same keys. They drift the first time one of them gains a key alone.
     schema = json.loads((ROOT / "schema" / "app.schema.json").read_text())
     documented = set(schema["properties"])
-    known = TOP_LEVEL | TABLES
+    known = TOP_LEVEL | set(policy.channels)
     for missing, where in (
         (known - documented, "schema/app.schema.json"),
-        (documented - known, "queue.py"),
+        (documented - known, "policy.yaml or queue.py"),
     ):
         if missing:
             failures += 1
             print(f"FAIL {where} is missing: {', '.join(sorted(missing))}")
     if known == documented:
-        print("ok   the schema and the rules describe the same keys")
-    for table, keys in (("apple", APPLE_KEYS), ("play", PLAY_KEYS), ("stores", STORE_KEYS)):
-        documented = set(schema["properties"][table]["properties"])
-        if documented != keys:
+        print("ok   the schema, the rules and the channels describe the same keys")
+    # Every channel the policy declares is a target this queue can build for and a set of
+    # settings the schema documents.
+    for name, channel in policy.channels.items():
+        documented = set(schema["properties"][name]["properties"])
+        if documented != channel.options:
             failures += 1
-            print(f"FAIL {table}: the schema has {sorted(documented)}, the rules {sorted(keys)}")
+            print(f"FAIL {name}: the schema has {sorted(documented)}, the policy {sorted(channel.options)}")
         else:
-            print(f"ok   {table} keys agree")
+            print(f"ok   {name} settings agree")
+    targets = set(schema["properties"]["distribution"]["properties"])
+    declared = {c.target for c in policy.channels.values()}
+    if targets != declared:
+        failures += 1
+        print(f"FAIL distribution: the schema takes {sorted(targets)}, the channels {sorted(declared)}")
+    else:
+        print("ok   the schema takes the targets the channels name")
 
     # The real catalog passes its own rules, every time this runs.
     everything = catalog()
@@ -1235,16 +1362,15 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--metadata", required=True, help="`day metadata --json` output")
     p.set_defaults(func=cmd_verify)
 
-    p = sub.add_parser("authorize", help="warn when a change comes from outside the maintainers")
+    p = sub.add_parser("authorize", help="warn when a change comes from outside an app's maintainers")
     p.add_argument("apps", nargs="+", help="app tokens the change touches")
     p.add_argument("--actor", help="the GitHub account proposing the change")
-    p.add_argument("--base", default="origin/main", help="the ref holding the current maintainers")
     p.set_defaults(func=cmd_authorize)
 
     p = sub.add_parser("record", help="write a publication into state/published.json")
     p.add_argument("--app", required=True)
     p.add_argument("--tag")
-    p.add_argument("--stores", help="comma-separated: apple,play")
+    p.add_argument("--channels", help="comma-separated channel names this run published to")
     p.add_argument("--run-url")
     p.set_defaults(func=cmd_record)
 

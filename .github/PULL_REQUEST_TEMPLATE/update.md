@@ -14,4 +14,4 @@
       submission that repeats or lowers them.
 - [ ] The store listing in the app's repository is current for this version, including its
       release notes.
-- [ ] I am listed in `maintainers` for this app.
+- [ ] I maintain this app, or its maintainers know this update is coming.
