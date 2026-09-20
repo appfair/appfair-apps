@@ -1,16 +1,15 @@
-# Merging a submission publishes it, through the same three stages the pull request ran, with a
-# fourth added at the end:
+# Merging a submission publishes it, through the three stages the pull request ran plus a fourth:
 #
 #   plan, verify   read this repository and the app's manifest. No app code, no secrets.
 #   build          checks the app out and runs its build. App code, no secrets.
 #   validate       reads what the build produced. No app code, no secrets.
 #   publish        signs that package and hands it to the store. Secrets, and no app code.
 #
-# The split is the point. The job that runs a submitted app's build never sees a key, and the job
-# that holds the keys never runs a line the app wrote: it re-signs an archive and uploads it.
+# The job that builds a submitted app has no access to the keys, and the job that holds the keys
+# does not run the app's code: it re-signs an archive and uploads it.
 #
 # Merging is the approval, so this workflow asks for none. Branch protection on `main` and
-# CODEOWNERS on `apps/` decide who can cause a run.
+# CODEOWNERS on `apps/` decide who can start a run.
 name: publish
 
 on:
@@ -58,7 +57,7 @@ jobs:
             python3 scripts/queue.py plan --changed-from "${{ github.event.before }}"
           fi
 
-  # The same question the pull request asked, asked again on what is now on `main`.
+  # The pull request's checks, repeated against what is now on `main`.
   verify:
     name: verify ${{ matrix.token }}
     needs: plan
@@ -72,9 +71,8 @@ jobs:
       - name: Where does ${{ matrix.tag }} point now?
         run: |
           set -euo pipefail
-          # A tag can be moved between the review and the merge, and this is the run that would
-          # publish what it moved to. The build follows the commit either way; the check below
-          # says so rather than letting it pass unnoticed.
+          # A tag can move between the review and the merge. The build follows the pinned commit
+          # either way, and the check below reports the move.
           PEELED=$(git ls-remote --tags "https://github.com/${{ matrix.repo }}" "refs/tags/${{ matrix.tag }}^{}" | cut -f1)
           PLAIN=$(git ls-remote --tags "https://github.com/${{ matrix.repo }}" "refs/tags/${{ matrix.tag }}" | cut -f1)
           echo "TAG_COMMIT=${PEELED:-$PLAIN}" >> "$GITHUB_ENV"
@@ -115,7 +113,7 @@ jobs:
           python3 scripts/queue.py verify --app "${{ matrix.token }}" --metadata metadata.json \
             --tag-commit "${TAG_COMMIT:-}"
 
-  # Stage A: the app's own build, on a runner with no credentials on it.
+  # Stage A: the app's build, on a runner with no credentials.
   build:
     name: build ${{ matrix.token }} ${{ matrix.target }}
     needs: [plan, verify]
@@ -142,7 +140,7 @@ jobs:
           path: packages
           if-no-files-found: error
 
-  # Stage B: everything that has to be true about the package before anybody signs it.
+  # Stage B: what has to be true about the package before it is signed.
   validate:
     name: validate ${{ matrix.token }} ${{ matrix.target }}
     needs: [plan, build]
@@ -171,9 +169,8 @@ jobs:
           allow-mismatch: ${{ inputs.allow-mismatch && 'true' || 'false' }}
           github-token: ${{ github.token }}
 
-  # Stage C: the App Fair's signature, and the store. This is the only job in the repository that
-  # can reach the secrets, and the only code it runs is the day CLI, fastlane, and the platform's
-  # own signing tools working on an archive.
+  # Stage C: signing and upload. This is the only job that can reach the secrets, and it runs the
+  # day CLI, fastlane and the platform signing tools over an archive.
   publish:
     name: publish ${{ matrix.token }} → ${{ matrix.channel }}
     needs: [plan, validate]
@@ -228,8 +225,7 @@ jobs:
           asc-issuer: ${{ secrets.DAY_ASC_ISSUER }}
           asc-key-b64: ${{ secrets.DAY_ASC_KEY_B64 }}
 
-  # What was published, written back into the repository, so the catalog's state is a file
-  # anybody can open.
+  # Record the publication in the repository, so the catalog's state is a file.
   record:
     name: record ${{ matrix.token }}
     needs: [plan, publish]

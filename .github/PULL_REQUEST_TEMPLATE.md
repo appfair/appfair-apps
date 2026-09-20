@@ -1,10 +1,10 @@
 <!--
 Thank you for submitting to the App Fair catalog.
 
-One app per pull request, one file under apps/. The checks below run automatically the moment you
-open it, so this list is for the maintainer reading the change.
+A pull request covers one app and changes one file under apps/. The checks run as soon as you
+open it; the list below is for the maintainer reviewing the change.
 
-Specialized templates, if you prefer one:
+There are two narrower templates:
   ?template=new-app.md   a first submission
   ?template=update.md    a new version of an app already in the catalog
 -->
@@ -18,8 +18,8 @@ Specialized templates, if you prefer one:
 
 ## What this changes
 
-<!-- A new app, or what is new in this version. A sentence per notable change is plenty; the
-     release notes on the store come from the app's own store listing. -->
+<!-- A new app, or what changed in this version. Keep it short; the release notes shown in the
+     store come from the app's own store listing. -->
 
 ## Confirmations
 

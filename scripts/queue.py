@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
-"""The submission queue's one program: validate submissions, plan builds, verify what was built,
-and record what was published.
+"""The catalog's command-line tool: write and validate submissions, plan builds, check what was
+built, and record what was published.
 
-Every workflow in this repository calls a subcommand here, so the rules live in one file that a
-maintainer can read, run locally, and test:
+The workflows call subcommands here, which keeps the rules in one file that can be read, run
+locally and tested:
 
     scripts/queue.py validate apps/Faire-Games.yaml   # or --all
     scripts/queue.py plan --changed-from origin/main  # the build matrix for a pull request
     scripts/queue.py verify --app Faire-Games --metadata day-metadata.json
     scripts/queue.py authorize Faire-Games --actor someone --base origin/main
     scripts/queue.py record --app Faire-Games --stores apple,play --run-url https://…
-    scripts/queue.py selftest                         # the cases below, no network, no checkout
+    scripts/queue.py selftest                         # the cases below, offline
 
-The only dependency is PyYAML, which every GitHub runner already carries. Errors print as GitHub
-annotations when GITHUB_ACTIONS is set, and as plain lines on a terminal.
+PyYAML is the one dependency, and GitHub runners have it. Errors print as GitHub annotations
+under GITHUB_ACTIONS and as plain lines otherwise.
 """
 
 from __future__ import annotations
@@ -30,22 +30,20 @@ from pathlib import Path
 
 try:
     import yaml
-except ImportError:  # pragma: no cover - the message is the point
+except ImportError:  # pragma: no cover
     sys.exit("scripts/queue.py needs PyYAML: pip install pyyaml (GitHub runners have it already)")
 
 ROOT = Path(__file__).resolve().parent.parent
 APPS = ROOT / "apps"
 STATE = ROOT / "state" / "published.json"
 
-# The keys a submission may carry. Anything else is a typo, and a typo that parsed would be a rule
-# nobody applied. A channel's own settings live under its name, and policy.yaml says which
-# channels exist and which settings each of them takes.
+# The keys a submission may carry; anything else is rejected as a typo. A channel's settings live
+# under its name, and policy.yaml lists the channels and the settings each one takes.
 TOP_LEVEL = {"token", "title", "tag", "commit", "distribution", "summary"}
 
 
 def load_yaml(path: Path) -> dict:
-    """One YAML document as a mapping. A file holding anything else raises, and the caller turns
-    that into a problem against the file."""
+    """One YAML document as a mapping. Anything else raises, and the caller reports it."""
     data = yaml.safe_load(path.read_text())
     if data is None:
         return {}
@@ -60,12 +58,11 @@ def load_yaml(path: Path) -> dict:
 
 
 def default_flavor() -> str:
-    """The Day build flavor every submission is built with: this catalog's own name.
+    """The Day build flavor every submission is built with, taken from this repository's name.
 
-    `appfair-apps` builds each app's `appfair` flavor, and a fork called `gamesfair-apps` builds
-    its `gamesfair` one, with nothing to edit. The identity an app is published under belongs to
-    whoever publishes it, so the name of the queue is the right place for it to come from — and a
-    submission cannot choose it.
+    `appfair-apps` builds each app's `appfair` flavor; a fork called `gamesfair-apps` builds
+    `gamesfair`. Submissions do not choose it, since the flavor carries the identity the catalog
+    publishes under.
     """
     repository = os.environ.get("GITHUB_REPOSITORY", "")
     name = repository.split("/")[-1] if repository else ROOT.name
@@ -74,7 +71,7 @@ def default_flavor() -> str:
 
 @dataclass
 class Channel:
-    """One place an app can be published, as policy.yaml declares it."""
+    """One channel an app can be published to, as declared in policy.yaml."""
 
     name: str
     target: str
@@ -90,7 +87,7 @@ class Channel:
 
 @dataclass
 class Policy:
-    """policy.yaml: what the catalog accepts. Read once, passed everywhere."""
+    """policy.yaml, read once and passed to the checks."""
 
     id_namespace: str
     token_pattern: str
@@ -130,13 +127,13 @@ class Policy:
 
     @property
     def buildable_targets(self) -> list[str]:
-        """The targets at least one channel takes a package from."""
+        """The targets at least one ready channel takes a package from."""
         return sorted({c.target for c in self.ready_channels.values()})
 
 
 @dataclass
 class Problem:
-    """One thing wrong with one submission, in the shape an annotation wants."""
+    """One problem with one submission, in the form an annotation takes."""
 
     file: str
     message: str
@@ -150,7 +147,7 @@ class Problem:
 
 @dataclass
 class App:
-    """One `apps/<token>.yaml`, parsed. [`validate_app`] decides whether it is usable."""
+    """One parsed `apps/<token>.yaml`. [`validate_app`] decides whether it is usable."""
 
     path: Path
     data: dict
@@ -162,11 +159,10 @@ class App:
 
     @property
     def owner_repo(self) -> str:
-        """`owner/name`, the shape every GitHub action wants.
+        """`owner/name`, the form GitHub actions take.
 
-        An App Fair app lives at `<token>/<token>`: the token is the name of its organization and
-        of the repository inside it (https://appfair.org/docs/inclusion-criteria/#naming), so the
-        submission says it once and nothing can disagree with it.
+        App Fair apps live at `<token>/<token>`
+        (https://appfair.org/docs/inclusion-criteria/#naming), so the token gives both halves.
         """
         return f"{self.token}/{self.token}"
 
@@ -176,8 +172,8 @@ class App:
 
 
 def relative(path: Path) -> str:
-    """A path as an annotation wants it: relative to the repository when it is inside one, and
-    left alone when it is somewhere else, such as a fixture under /tmp in the selftest."""
+    """A path for an annotation: relative to the repository, or unchanged for a path outside it,
+    such as a selftest fixture under /tmp."""
     try:
         return str(path.relative_to(ROOT))
     except ValueError:
@@ -194,7 +190,7 @@ def load_app(path: Path) -> App:
 
 
 def catalog() -> list[App]:
-    """Every submission in the repository, for the checks that compare apps against each other."""
+    """Every submission in the repository."""
     paths = sorted(list(APPS.glob("*.yaml")) + list(APPS.glob("*.yml")))
     return [load_app(p) for p in paths]
 
@@ -205,10 +201,10 @@ def catalog() -> list[App]:
 
 
 def validate_app(app: App, policy: Policy, others: list[App] | None = None) -> list[Problem]:
-    """Everything that can be checked from inside this repository.
+    """Everything checkable without leaving this repository.
 
-    Whether the app at that tag is really that app is a question for `verify`, which reads the
-    answer out of the app's own manifest once the tag is checked out.
+    Whether the commit builds the app the file claims is `verify`'s job, which reads the app's
+    manifest after checking it out.
     """
     rel = relative(app.path)
     problems = list(app.problems)
@@ -259,9 +255,8 @@ def validate_app(app: App, policy: Policy, others: list[App] | None = None) -> l
             f"40-character sha in lower case"
         )
 
-    # Where the app goes, and what builds for it. The channels sit under the target whose package
-    # they take, so the pairing is in the file: a channel under the wrong target is an error the
-    # shape catches, and a target can feed more than one channel as the catalog grows.
+    # Where the app goes, under the target that builds for it. A channel listed under the wrong
+    # target is caught by the shape of the file, and a target can feed several channels.
     distribution = data.get("distribution")
     used_channels: list[str] = []
     if not isinstance(distribution, dict) or not distribution:
@@ -302,8 +297,7 @@ def validate_app(app: App, policy: Policy, others: list[App] | None = None) -> l
                 continue
             used_channels.append(channel)
 
-    # A channel's own settings live under its name, and only the channels this app publishes to
-    # may carry them: settings for a channel nobody uses are a rule that does nothing.
+    # A channel's settings live under its name, and only for channels this app publishes to.
     for name, spec in known_channels.items():
         if name not in data:
             continue
@@ -326,8 +320,8 @@ def validate_app(app: App, policy: Policy, others: list[App] | None = None) -> l
         ):
             bad(f"{name}.profile-secret takes the NAME of a repository secret; this looks like a value")
 
-    # Two apps sharing a title would be two apps nobody can tell apart in the catalog, and the
-    # stores refuse the second one anyway (https://appfair.org/docs/inclusion-criteria/#naming).
+    # Titles are unique in the catalog, and the stores reject a duplicate anyway
+    # (https://appfair.org/docs/inclusion-criteria/#naming).
     for other in others or []:
         if other.path == app.path:
             continue
@@ -373,8 +367,8 @@ def changed_files(base: str) -> list[str]:
         text=True,
     )
     if out.returncode != 0:
-        # A shallow clone without the base commit. A merge to the default branch changes exactly
-        # what its last commit changed, which covers the case this fallback exists for.
+        # A shallow clone without the base commit. A merge to the default branch changes what its
+        # last commit changed, so the fallback covers that case.
         out = subprocess.run(
             ["git", "diff", "--name-only", "HEAD~1", "HEAD"],
             cwd=ROOT,
@@ -396,7 +390,7 @@ def app_channels(app: App, policy: Policy) -> list[tuple[str, Channel]]:
 
 
 def matrix_entry(app: App, policy: Policy) -> dict:
-    """One row per app: what every stage needs to know about the submission itself."""
+    """One row per app, holding what every stage needs from the submission."""
     pairs = app_channels(app, policy)
     return {
         "token": app.token,
@@ -405,9 +399,7 @@ def matrix_entry(app: App, policy: Policy) -> dict:
         "repo": app.owner_repo,
         "tag": app.data.get("tag", ""),
         "commit": app.data.get("commit", ""),
-        # Every app is built as this catalog's flavor, whose manifest carries the identity it is
-        # published under. The app's own build belongs to its repository, and building it here
-        # would double every submission.
+        # Only the catalog's flavor is built here; the app's own build belongs to its repository.
         "flavor": policy.flavor,
         "flavors_only": True,
         "targets": ",".join(sorted({target for target, _ in pairs})),
@@ -417,7 +409,7 @@ def matrix_entry(app: App, policy: Policy) -> dict:
 
 
 def build_rows(entry: dict) -> list[dict]:
-    """One row per target: a build, and the validation of what it produced."""
+    """One row per target: the build and the validation of what it produced."""
     return [
         dict(
             entry,
@@ -430,7 +422,7 @@ def build_rows(entry: dict) -> list[dict]:
 
 
 def publish_rows(app: App, entry: dict, policy: Policy) -> list[dict]:
-    """One row per channel: a signature and an upload, reading the package its target built."""
+    """One row per channel: the signing and upload of its target's package."""
     rows = []
     for target, channel in app_channels(app, policy):
         settings = app.data.get(channel.name) or {}
@@ -440,13 +432,11 @@ def publish_rows(app: App, entry: dict, policy: Policy) -> list[dict]:
                 target=target,
                 runner="macos-15" if target == "ios-uikit" else "ubuntu-latest",
                 channel=channel.name,
-                # `upload` puts the build on the channel and stops there, which suits a queue
-                # where publishing a binary and asking a store to review it are two decisions.
-                # `submit: true` under the channel runs the lane that asks for review.
+                # `upload` puts the build on the channel and stops; `submit: true` under the
+                # channel runs the lane that requests review.
                 lane=channel.submit_lane if settings.get("submit") else channel.lane,
-                # Empty unless the submission named a secret of its own. The Apple channel
-                # issues a profile during the run from the catalog's App Store Connect key, so
-                # an app that stores one is the exception rather than the rule.
+                # Empty unless the submission named a secret. The Apple channel requests a
+                # profile during the run from the catalog's App Store Connect key.
                 profile_secret=(
                     str(settings.get("profile-secret", ""))
                     if "profile-secret" in channel.options
@@ -524,10 +514,10 @@ def cmd_plan(args: argparse.Namespace) -> int:
 
 
 def cmd_verify(args: argparse.Namespace) -> int:
-    """Cross-check a submission against the app it points at, once that app is checked out.
+    """Check a submission against the app it points at, once that app is checked out.
 
-    This is the half that metadata alone cannot answer: whether the tag builds the app this file
-    claims, under the bundle id the App Fair publishes it as.
+    Answers what the metadata alone cannot: whether the commit builds the app the file claims,
+    under the bundle id the App Fair publishes it as.
     """
     policy = Policy.load()
     everything = catalog()
@@ -561,16 +551,14 @@ def cmd_verify(args: argparse.Namespace) -> int:
         if android.get("id") != expected_android:
             bad(f"Android must build under {expected_android!r}, not {android.get('id')!r}")
 
-    # The tag still points at the commit this submission was written against. A tag can be moved,
-    # and a submission reviewed at one commit and published from another would be a review of
-    # nothing. The stages check the commit out, so a moved tag changes no bytes; this says so out
-    # loud, because a moved tag usually means the maintainer meant to submit something else.
+    # Does the tag still point at the pinned commit? The stages check out the commit, so a moved
+    # tag changes nothing that is built, but it usually means a different release was intended.
     submitted = str(app.data.get("commit", ""))
     if args.tag_commit is not None and submitted and args.tag_commit != submitted:
         bad(
             f"the tag now points at {args.tag_commit[:12]}, and this submission names "
-            f"{submitted[:12]}. The build follows the commit; update `commit` when the tag was "
-            f"moved on purpose, and ask the maintainer when it was not"
+            f"{submitted[:12]}. The build follows the commit. Update `commit` for an intentional "
+            f"move, or check with the maintainer"
         )
 
     # A source release and its store flavor have independent version sequences. The tag is
@@ -599,16 +587,239 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
 
 # --------------------------------------------------------------------------------------------
-# resolve — the two lines a submission pins itself with
+# add and update
+# --------------------------------------------------------------------------------------------
+
+
+def remote_tags(repo_url: str) -> list[str]:
+    """Every tag in the app's repository, read without cloning it."""
+    # Without this, a missing repository prompts for a username instead of reporting the name.
+    out = subprocess.run(
+        ["git", "ls-remote", "--tags", repo_url],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+    )
+    if out.returncode != 0:
+        detail = out.stderr.strip().splitlines()[-1] if out.stderr.strip() else "unreadable"
+        if "could not read Username" in detail or "Authentication failed" in detail:
+            detail = "no public repository there — check the token, which is the repository name"
+        raise RuntimeError(f"{repo_url}: {detail}")
+    names = set()
+    for line in out.stdout.splitlines():
+        _, _, ref = line.partition("\t")
+        if ref.startswith("refs/tags/"):
+            names.add(ref[len("refs/tags/") :].removesuffix("^{}"))
+    return sorted(names)
+
+
+def version_key(tag: str) -> tuple:
+    """A sortable form of a tag: the numbers, then releases ahead of their own pre-releases."""
+    match = re.match(r"^v(\d+)\.(\d+)\.(\d+)(?:[.-](.*))?$", tag)
+    if not match:
+        return (0, 0, 0, 0, tag)
+    major, minor, patch, suffix = match.groups()
+    return (int(major), int(minor), int(patch), 0 if suffix else 1, suffix or "")
+
+
+def newest_tag(tags: list[str], pattern: str) -> str | None:
+    """The highest tag the catalog accepts."""
+    usable = [t for t in tags if re.match(pattern, t)]
+    return max(usable, key=version_key) if usable else None
+
+
+def tag_commit(repo_url: str, tag: str) -> str | None:
+    """The commit a tag points at, peeling annotated tags."""
+    for ref in (f"refs/tags/{tag}^{{}}", f"refs/tags/{tag}"):
+        out = subprocess.run(
+            ["git", "ls-remote", repo_url, ref],
+            capture_output=True,
+            text=True,
+            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+        )
+        if out.stdout.strip():
+            return out.stdout.split("\t")[0].strip()
+    return None
+
+
+def latest_release(owner_repo: str) -> str | None:
+    """The tag of the repository's latest release, as GitHub marks it.
+
+    The comparison needs a release, so the latest release is a better answer than the highest tag.
+    A failure here falls back to the tags.
+    """
+    import urllib.error
+    import urllib.request
+
+    request = urllib.request.Request(
+        f"https://api.github.com/repos/{owner_repo}/releases/latest", method="GET"
+    )
+    request.add_header("Accept", "application/vnd.github+json")
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if token:
+        request.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:  # noqa: S310
+            return str(json.loads(response.read()).get("tag_name") or "") or None
+    except (urllib.error.HTTPError, OSError, ValueError):
+        return None
+
+
+def fetch_text(owner_repo: str, ref: str, path: str) -> str | None:
+    """One file from a public repository, as text, or None."""
+    import urllib.error
+    import urllib.request
+
+    url = f"https://raw.githubusercontent.com/{owner_repo}/{ref}/{path}"
+    try:
+        with urllib.request.urlopen(url, timeout=20) as response:  # noqa: S310
+            return response.read().decode().strip()
+    except (urllib.error.HTTPError, OSError, UnicodeDecodeError):
+        return None
+
+
+def app_title(owner_repo: str, commit: str, token: str, flavor: str) -> str:
+    """The app's name, from its store listing, then its flavor manifest, then the token."""
+    name = fetch_text(owner_repo, commit, f"store-{flavor}/en/name.txt")
+    if name:
+        return name.splitlines()[0].strip()
+    manifest = fetch_text(owner_repo, commit, f"Day-{flavor}.toml")
+    if manifest:
+        match = re.search(r'(?m)^\s*title\s*=\s*"([^"]+)"', manifest)
+        if match:
+            return match.group(1)
+    return token.replace("-", " ")
+
+
+def released(token: str, policy: Policy, wanted: str | None) -> tuple[str, str, str]:
+    """The tag to submit and the commit it points at.
+
+    Returns `(tag, commit, how)`; `how` records whether the tag came from the latest release or
+    from the tag list.
+    """
+    owner_repo = f"{token}/{token}"
+    repo_url = f"https://github.com/{owner_repo}"
+    tag, how = wanted, "named on the command line"
+    if not tag:
+        tag = latest_release(owner_repo)
+        how = "the latest release"
+    if not tag:
+        tag = newest_tag(remote_tags(repo_url), policy.tag_pattern)
+        how = "the highest tag (no release was readable)"
+    if not tag:
+        raise RuntimeError(f"{repo_url} publishes no release or tag this catalog would accept")
+    if not re.match(policy.tag_pattern, tag):
+        raise RuntimeError(f"{tag} does not match {policy.tag_pattern}")
+    commit = tag_commit(repo_url, tag)
+    if not commit:
+        raise RuntimeError(f"{repo_url} has no tag {tag}")
+    return tag, commit, how
+
+
+def submission_text(token: str, title: str, tag: str, commit: str, policy: Policy) -> str:
+    """The text of a new submission file."""
+    channels = {}
+    for name, channel in policy.ready_channels.items():
+        channels.setdefault(channel.target, []).append(name)
+    distribution = "\n".join(
+        f"  {target}:\n" + "\n".join(f"    - {name}" for name in sorted(names))
+        for target, names in sorted(channels.items())
+    )
+    return f"""# yaml-language-server: $schema=../schema/app.schema.json
+#
+# {title} in the App Fair catalog.
+#
+# The file is named for the app token, which is also where the app lives:
+# https://github.com/{token}/{token}
+#
+# To publish a new version, open a pull request that changes the tag and the commit below. The
+# rest is read from the app's repository at that commit.
+
+token: {token}
+title: {title}
+tag: {tag}
+# The commit that tag points at. Since a tag can be moved afterwards, this is what every stage
+# checks out. `scripts/queue.py update {token}` rewrites both lines.
+commit: {commit}
+
+# Where this app goes, keyed by the target that builds for it. policy.yaml lists the channels the
+# queue can publish to. Drop a line to keep the app off a channel.
+distribution:
+{distribution}
+"""
+
+
+def report(app: App, policy: Policy) -> int:
+    """Validate the file that was just written and report any problems."""
+    problems = validate_app(app, policy, catalog())
+    for problem in problems:
+        problem.emit()
+    return 1 if problems else 0
+
+
+def cmd_add(args: argparse.Namespace) -> int:
+    """Write a new submission from the app's latest release."""
+    policy = Policy.load()
+    token = args.token
+    path = APPS / f"{token}.yaml"
+    if path.exists():
+        Problem(relative(path), f"already exists; `queue.py update {token}` moves it to a newer release").emit()
+        return 1
+    try:
+        tag, commit, how = released(token, policy, args.tag)
+    except RuntimeError as e:
+        Problem(f"{token}/{token}", str(e)).emit()
+        return 1
+    title = args.title or app_title(f"{token}/{token}", commit, token, policy.flavor)
+    path.write_text(submission_text(token, title, tag, commit, policy))
+    print(f"wrote    {relative(path)}")
+    print(f"         {title}: {tag} ({commit[:12]}), from {how}")
+    print("         review the title and the channel list before opening a pull request")
+    return report(load_app(path), policy)
+
+
+def cmd_update(args: argparse.Namespace) -> int:
+    """Move an existing submission to the app's latest release, leaving the rest of the file,
+    including its comments and channel settings, unchanged."""
+    policy = Policy.load()
+    token = args.token
+    path = next((p for p in (APPS / f"{token}.yaml", APPS / f"{token}.yml") if p.exists()), None)
+    if path is None:
+        Problem("apps", f"no submission for {token!r}; `queue.py add {token}` writes one").emit()
+        return 1
+    try:
+        tag, commit, how = released(token, policy, args.tag)
+    except RuntimeError as e:
+        Problem(relative(path), str(e)).emit()
+        return 1
+
+    text = path.read_text()
+    current = load_app(path).data
+    if str(current.get("tag", "")) == tag and str(current.get("commit", "")) == commit:
+        print(f"ok       {relative(path)} is already {tag} ({commit[:12]}), from {how}")
+        return report(load_app(path), policy)
+
+    # Edited line by line: a YAML round trip would drop the file's comments.
+    updated, tags = re.subn(r"(?m)^tag:[ \t]*\S.*$", f"tag: {tag}", text, count=1)
+    updated, commits = re.subn(
+        r"(?m)^commit:[ \t]*\S.*$", f"commit: {commit}", updated, count=1
+    )
+    if not tags or not commits:
+        Problem(relative(path), "has no `tag:` or `commit:` line to rewrite").emit()
+        return 1
+    path.write_text(updated)
+    print(f"updated  {relative(path)}")
+    print(f"         {current.get('tag', '?')} → {tag} ({commit[:12]}), from {how}")
+    return report(load_app(path), policy)
+
+
+# --------------------------------------------------------------------------------------------
+# resolve
 # --------------------------------------------------------------------------------------------
 
 
 def cmd_resolve(args: argparse.Namespace) -> int:
-    """Print the `tag` and `commit` lines for an app and tag.
-
-    Every submission pins a commit, and this is where the value comes from, so nobody has to know
-    that an annotated tag has to be peeled before its commit appears.
-    """
+    """Print the `tag` and `commit` lines for an app and tag, peeling an annotated tag."""
     repo = (args.repo or f"https://github.com/{args.token}/{args.token}").removesuffix(".git").rstrip("/")
     for ref in (f"refs/tags/{args.tag}^{{}}", f"refs/tags/{args.tag}"):
         out = subprocess.run(
@@ -632,15 +843,13 @@ def cmd_resolve(args: argparse.Namespace) -> int:
 
 
 def cmd_authorize(args: argparse.Namespace) -> int:
-    """Say whether the person proposing a change maintains the app it points at.
+    """Report whether the author of a change maintains the app it points at.
 
-    Who maintains an app is a fact about that app's repository, so this asks GitHub rather than
-    reading a list somebody typed here: a list would go stale the day a maintainer changed, and
-    nothing in this repository could tell.
+    Maintainership is a property of the app's own repository, so this queries GitHub instead of
+    keeping a list here that would go out of date.
 
-    It prints a warning and exits 0. The reviewer who merges decides, and there are good reasons
-    for someone else to bump a tag: a maintainer stepping in, a security fix, an app changing
-    hands. What this adds is that the change says so in the thread.
+    Prints a warning and exits 0. The reviewer who merges decides; someone other than the
+    maintainer may legitimately bump a tag, and the warning puts that in the thread.
     """
     import json as _json
     import urllib.error
@@ -673,14 +882,13 @@ def cmd_authorize(args: argparse.Namespace) -> int:
             print(f"ok   {token_name}: no author to check")
             continue
 
-        # An app kept under someone's own account has one maintainer, and the repository says so.
+        # An app under a personal account is maintained by its owner.
         if owner.lower() == actor.lower():
             print(f"ok   {token_name}: {actor} owns {app.owner_repo}")
             continue
 
-        # Write access to the app's repository is the real answer, and only a token with that
-        # access can read it. Public membership of the app's organization is the one a queue can
-        # always ask about, so it is what this reports.
+        # Write access is the accurate answer but needs a token with that access. Public
+        # membership of the app's organization is readable with any token.
         status = ask(f"https://api.github.com/repos/{owner}/{name}/collaborators/{actor}")
         if status == 204:
             print(f"ok   {token_name}: {actor} has write access to {app.owner_repo}")
@@ -710,8 +918,7 @@ def cmd_authorize(args: argparse.Namespace) -> int:
 
 
 def cmd_record(args: argparse.Namespace) -> int:
-    """Write down what was published, so the catalog's state is a file in the repository that
-    anybody can read."""
+    """Record a publication in state/published.json."""
     app = next((a for a in catalog() if a.token == args.app), None)
     if app is None:
         Problem("apps", f"no submission named {args.app!r} in apps/").emit()
@@ -738,7 +945,7 @@ def cmd_record(args: argparse.Namespace) -> int:
 
 
 # --------------------------------------------------------------------------------------------
-# inspect — what is inside a package, without running any of it
+# inspect
 # --------------------------------------------------------------------------------------------
 
 SIGNATURE_PATHS = ("META-INF/", "_CodeSignature/", "embedded.mobileprovision", "CodeResources")
@@ -747,8 +954,7 @@ SIGNATURE_PATHS = ("META-INF/", "_CodeSignature/", "embedded.mobileprovision", "
 def package_entries(path: Path) -> list[dict]:
     """Every file inside a package, with its size and digest.
 
-    A package is a zip — an .aab, an .apk and an .ipa all are — so this reads it as data and never
-    asks the operating system to run anything it holds.
+    .aab, .apk and .ipa are all zips, so this reads the package as data.
     """
     import hashlib
     import zipfile
@@ -779,8 +985,7 @@ def file_digest(path: Path) -> str:
 
 
 def find_aapt2() -> str | None:
-    """`aapt2` from the Android SDK, which reads an APK's binary manifest. It is a tool of the
-    platform, and it reads the package as data."""
+    """`aapt2` from the Android SDK, which reads an APK's binary manifest."""
     import glob
     import shutil
 
@@ -864,11 +1069,11 @@ def apple_facts(ipa: Path) -> dict:
 
 
 def cmd_inspect(args: argparse.Namespace) -> int:
-    """Write down what a package contains: every file with its digest, and the identity and
-    permissions its manifest declares.
+    """Record what a package contains: every file with its digest, plus the identity and
+    permissions from its manifest.
 
-    Nothing here executes the package. It is opened as a zip, and its manifest is read by the
-    platform's own tool (aapt2) or by Python's plist reader.
+    The package is opened as a zip and its manifest read with aapt2 or plistlib. Nothing in it is
+    executed.
     """
     package = Path(args.package)
     if not package.is_file():
@@ -885,9 +1090,8 @@ def cmd_inspect(args: argparse.Namespace) -> int:
     if fmt == "apk":
         facts = android_facts(package)
     elif fmt == "aab":
-        # An .aab keeps its manifest in protobuf, which needs bundletool to read. The .apk from
-        # the same pack run holds the same manifest in a form aapt2 reads, so the facts come from
-        # there and say so.
+        # An .aab stores its manifest as protobuf, which needs bundletool. The .apk from the same
+        # pack run carries the same manifest in a form aapt2 reads, so the facts come from there.
         facts = android_facts(Path(args.sibling)) if args.sibling else {
             "source": None,
             "note": "no sibling .apk was given, so no manifest facts were read",
@@ -929,7 +1133,7 @@ def cmd_inspect(args: argparse.Namespace) -> int:
 
 
 def write_summary(lines: list[str]) -> None:
-    """Add to the run's summary page when there is one, and to the terminal when there is not."""
+    """Append to the run summary, or print to the terminal when there is none."""
     path = os.environ.get("GITHUB_STEP_SUMMARY")
     text = "\n".join(lines) + "\n"
     if path:
@@ -940,7 +1144,7 @@ def write_summary(lines: list[str]) -> None:
 
 
 # --------------------------------------------------------------------------------------------
-# compare — the queue's build against the maintainer's release
+# compare
 # --------------------------------------------------------------------------------------------
 
 
@@ -1040,14 +1244,13 @@ def cmd_select_release(args: argparse.Namespace) -> int:
 
 
 # --------------------------------------------------------------------------------------------
-# audit — the package against what the submission and the app's manifest say
+# audit
 # --------------------------------------------------------------------------------------------
 
 
 def expected_permissions(metadata: dict, platform: str, app_id: str, policy_raw: dict) -> set[str]:
-    """What a package may ask for: the app's declared permissions mapped through day's own
-    catalog, the raw entries it declares for this platform, and the baseline the framework itself
-    adds (policy.yaml holds that list)."""
+    """The permissions a package may ask for: the app's declared permissions mapped through day's
+    catalog, its raw entries for this platform, and the framework baseline in policy.yaml."""
     catalog = {entry["name"]: entry for entry in metadata.get("permissionCatalog", [])}
     project = metadata.get("project", {})
     wanted: set[str] = set()
@@ -1064,10 +1267,10 @@ def expected_permissions(metadata: dict, platform: str, app_id: str, policy_raw:
 
 
 def cmd_audit(args: argparse.Namespace) -> int:
-    """Hold a package against the submission, the app's manifest and its provenance.
+    """Check a package against the submission, the app's manifest and its provenance.
 
-    Everything here reads files: the inspection report from the previous step, the app's manifest
-    as `day metadata --json` printed it, and the sidecars packed beside the artifact.
+    Reads the inspection report, the `day metadata --json` output for the app, and the sidecars
+    packed beside the artifact.
     """
     policy = Policy.load()
     policy_raw = load_yaml(ROOT / "policy.yaml")
@@ -1111,10 +1314,9 @@ def cmd_audit(args: argparse.Namespace) -> int:
                     f"(declared: {', '.join(sorted(allowed)) or 'none'})"
                 )
 
-    # 3. The provenance beside it describes this submission. These sidecars come from the same
-    #    untrusted stage as the package, so they are claims; what makes them worth reading is that
-    #    they are checked against facts from elsewhere — the digest of the file in hand, and the
-    #    commit the submitted tag resolves to, which this stage read from git itself.
+    # 3. The provenance beside the package. These sidecars come from the same untrusted stage as
+    #    the package, so each claim is checked against something known here: the digest of the
+    #    file, and the commit the submission pins.
     sidecars = Path(args.sidecars) if args.sidecars else None
     if sidecars and sidecars.is_dir():
         name = report["package"]
@@ -1194,15 +1396,15 @@ def cmd_audit(args: argparse.Namespace) -> int:
 
 
 # --------------------------------------------------------------------------------------------
-# wiring — the workflows against the actions they call
+# wiring
 # --------------------------------------------------------------------------------------------
 
 
 def action_definition(uses: str, local_actions: Path | None) -> tuple[str, dict] | None:
-    """The action.yml behind a `uses:`, from this repository or from the one it names.
+    """The action.yml behind a `uses:`, from this repository or the one it names.
 
-    A queue whose stages are actions has their interfaces as its dependency: an input renamed in
-    daybrite/actions would otherwise first appear as a failed submission.
+    The stages depend on those interfaces, so an input renamed in daybrite/actions should fail
+    this check instead of a submission.
     """
     if uses.startswith("./"):
         for name in ("action.yml", "action.yaml"):
@@ -1226,7 +1428,7 @@ def action_definition(uses: str, local_actions: Path | None) -> tuple[str, dict]
 
 
 def cmd_wiring(args: argparse.Namespace) -> int:
-    """Check every `uses:` in every workflow against the action it names."""
+    """Check every `uses:` in the workflows and actions against the action it names."""
     local_actions = Path(args.actions_dir) if args.actions_dir else None
     problems = 0
     checked = 0
@@ -1328,7 +1530,7 @@ CASES: list[tuple[str, str, str]] = [
         "must list at least one channel",
     ),
     ("nowhere to publish", "distribution:|distributions:", "distribution is required"),
-    ("a key nobody reads", "title: Fair Games|titel: Fair Games", "unknown key"),
+    ("a misspelled key", "title: Fair Games|titel: Fair Games", "unknown key"),
     (
         "a submission choosing its own flavor",
         "title: Fair Games|title: Fair Games\nflavor: something-else",
@@ -1360,9 +1562,8 @@ CASES: list[tuple[str, str, str]] = [
 def cmd_selftest(_args: argparse.Namespace) -> int:
     """Run the validator over one good submission and one broken one per rule.
 
-    The queue cannot be tried out before a pull request exists, so its rules are exercised here
-    instead. Every case is a submission this repository could receive, and the assertion is the
-    message a maintainer would read.
+    Each case is a submission this repository could receive; the assertion is the message a
+    maintainer would read.
     """
     import tempfile
 
@@ -1420,6 +1621,51 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
     else:
         print("ok   the schema takes the targets the channels name")
 
+    # policy.yaml is read by the workflows and the actions as well as by this script, and a key
+    # dropped from it fails in the middle of a submission. Name them here instead.
+    raw = load_yaml(ROOT / "policy.yaml")
+    required = [
+        "id-namespace", "token-pattern", "tag-pattern", "commit-pattern", "channels",
+        "day-version", "ignore-in-comparison", "mismatch", "override-label", "virus-scan",
+        "baseline-permissions", "app-data-paths",
+    ]
+    missing = [key for key in required if key not in raw]
+    if missing:
+        failures += 1
+        print(f"FAIL policy.yaml is missing: {', '.join(missing)}")
+    else:
+        print("ok   policy.yaml carries every key the workflows read")
+
+    # Picking a release: the numbers decide, and a released version comes after a pre-release of
+    # the same numbers. `add` and `update` write whatever this chooses into a submission.
+    tags = ["v1.9.0", "v1.10.0", "v2.0.0-rc.1", "v2.0.0", "v0.1.0", "not-a-tag", "v10.0.0"]
+    picked = newest_tag(tags, policy.tag_pattern)
+    if picked == "v10.0.0":
+        print("ok   the newest tag is picked by version order")
+    else:
+        failures += 1
+        print(f"FAIL the newest of {tags} came out as {picked!r}")
+    if newest_tag(["v2.0.0-rc.1", "v2.0.0"], policy.tag_pattern) == "v2.0.0":
+        print("ok   a release comes after its own pre-release")
+    else:
+        failures += 1
+        print("FAIL a pre-release was chosen over the release")
+    if newest_tag(["main", "latest"], policy.tag_pattern) is None:
+        print("ok   nothing to pick when no tag is a version")
+    else:
+        failures += 1
+        print("FAIL a branch name was chosen as a release")
+
+    # `update` rewrites two lines and leaves everything else, comments included, where it was.
+    before = GOOD.replace("tag: v1.9.0", "tag: v1.9.0\n# a comment under the tag")
+    after = re.sub(r"(?m)^tag:[ \t]*\S.*$", "tag: v2.0.0", before, count=1)
+    after = re.sub(r"(?m)^commit:[ \t]*\S.*$", "commit: " + "a" * 40, after, count=1)
+    if "# a comment under the tag" in after and "tag: v2.0.0" in after and "a" * 40 in after:
+        print("ok   an update keeps the comments around what it changes")
+    else:
+        failures += 1
+        print("FAIL an update lost the file around the two lines it changes")
+
     # The flavor follows this catalog's name, so a fork builds its own without editing anything.
     expected = ROOT.name.removesuffix("-apps")
     if policy.flavor == expected:
@@ -1476,6 +1722,17 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--metadata", required=True, help="`day metadata --json` output")
     p.add_argument("--tag-commit", help="what the tag points at now, for the pin check")
     p.set_defaults(func=cmd_verify)
+
+    p = sub.add_parser("add", help="write a new submission from what an app has released")
+    p.add_argument("token", help="the app token, whose repository is <token>/<token>")
+    p.add_argument("--tag", help="a particular release, instead of the latest")
+    p.add_argument("--title", help="the app's name, instead of the one its listing carries")
+    p.set_defaults(func=cmd_add)
+
+    p = sub.add_parser("update", help="move a submission to what the app has released since")
+    p.add_argument("token", help="the app token")
+    p.add_argument("--tag", help="a particular release, instead of the latest")
+    p.set_defaults(func=cmd_update)
 
     p = sub.add_parser("resolve", help="print the tag and commit lines for an app and tag")
     p.add_argument("--token", help="the app token, whose repository is <token>/<token>")

@@ -1,8 +1,7 @@
-# The catalog checking itself: the queue's rules against their own cases, every submission against
-# those rules, every workflow through a YAML parser, and every action call against the action it
-# names. It takes seconds on one runner and runs on anything that touches this repository, which
-# covers a change to the rules themselves — pr.yml exercises those only against whatever app a
-# pull request happens to touch.
+# The repository's own checks: the rules against their own cases, every submission against those
+# rules, every workflow through a YAML parser, and every action call against the action it names.
+# It runs on any change here, including changes to the rules, which pr.yml only exercises against
+# whichever app a pull request touches.
 name: checks
 
 on:
@@ -10,8 +9,8 @@ on:
     branches: [main]
   pull_request:
   schedule:
-    # Daily, because the actions this queue calls live in another repository and can change
-    # under it. A red check here is cheaper than a failed submission.
+    # Daily, because the actions these workflows call live in another repository and can change
+    # under them. Better to find out here than in the middle of a submission.
     - cron: "40 5 * * *"
   workflow_dispatch:
 

@@ -1,35 +1,30 @@
-# The catalog's rules, in one file, so the scripts that enforce them carry no policy of their own
-# and a reviewer can change what the App Fair accepts without touching a line of code.
-# `scripts/queue.py validate` reads this on every pull request.
+# The rules the catalog applies to a submission. `scripts/queue.py validate` reads this on every
+# pull request. Changing what the App Fair accepts is an edit to this file.
 
-# Every app the App Fair publishes is published by the App Fair: the bundle ids live in this
-# namespace, and the App Fair Project is the publisher of record for them
+# The bundle-id namespace. The App Fair Project is the publisher of record for everything in it
 # (https://appfair.org/docs/building/#bundle-id).
 id-namespace: org.appfair.app.
 
-# The app token: the name of the app's GitHub organization and repository, and the last segment
-# of its bundle id. It is immutable for the life of the app and unique in this catalog, which is
-# why it is also the name of the file under apps/.
+# The app token: the name of the app's GitHub organization and repository, the last segment of its
+# bundle id, and the name of its file under apps/. It does not change for the life of the app.
 token-pattern: '^[A-Za-z][A-Za-z0-9-]{1,38}$'
 
-# A submission names a released tag of the app. What gets built has to be what the maintainer
-# released, and it has to still be there a year from now.
+# Submissions name a released tag, so that what is built is what the maintainer released and is
+# still there later.
 tag-pattern: '^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$'
 
-# ...and the commit that tag pointed at when the submission was written. A tag can be moved, and
-# a submission reviewed at one commit and published from another would be a review of nothing, so
-# every stage checks out the commit and the tag is held against it.
+# ...and the commit that tag pointed at when the submission was written. Tags can be moved, so
+# every stage checks out the commit and compares the tag against it.
 commit-pattern: '^[0-9a-f]{40}$'
 
-# Where an app can be published, and what each channel is. A submission names its channels under
-# the target that builds for them, so the pairing is part of the file rather than a rule that
-# checks two lists against each other, and a target can feed more than one channel.
+# The channels an app can be published to. A submission lists its channels under the target that
+# builds for them, and a target can feed more than one channel.
 #
 #   target        the Day target whose package this channel takes
 #   lane          the fastlane lane that uploads it
 #   submit-lane   the lane that also asks for review, when a submission sets `submit: true`
 #   options       the settings a submission may give this channel
-#   status        `ready`, or `planned` for a channel the queue knows of and cannot publish to yet
+#   status        `ready`, or `planned` for a declared channel with no implementation yet
 channels:
   apple-app-store:
     target: ios-uikit
@@ -43,9 +38,8 @@ channels:
     submit-lane: android release
     options: [submit]
     status: ready
-  # The channels the catalog is headed for. A submission naming one of these is told that it is
-  # coming rather than that it is wrong, and turning one on is this entry plus an arm in
-  # .github/actions/sign-submit.
+  # Declared but not implemented. A submission naming one of these is rejected with that reason.
+  # Implementing one means changing `status` here and adding an arm to .github/actions/sign-submit.
   altstore:
     target: ios-uikit
     options: [submit]
@@ -59,20 +53,55 @@ channels:
     options: [submit]
     status: planned
 
-# The Day build flavor every submission is built with. It follows this catalog's name — the
-# `appfair-apps` queue builds each app's `appfair` flavor, and a fork called `gamesfair-apps`
-# builds its `gamesfair` one — so a fork changes nothing here. That flavor's manifest
-# (`Day-<flavor>.toml` in the app) is where the identity the app is published under lives, which
-# is why the queue names it and a submission cannot.
+# The Day build flavor every submission is built with. It defaults to this repository's name
+# without the `-apps` suffix, so `appfair-apps` builds each app's `appfair` flavor and a fork
+# called `gamesfair-apps` builds `gamesfair` with no edit here. The flavor's manifest
+# (`Day-<flavor>.toml` in the app) carries the identity the app is published under.
 #
 # flavor: appfair
 
-# Which day CLI the queue builds every submission with. `main` tracks the framework; a released
-# version freezes what the catalog builds against.
+# Which day CLI builds every submission. `main` tracks the framework; a released version pins it.
 day-version: main
 
-# An App Store provisioning profile is issued per bundle id, and this catalog issues one during
-# the run: `fastlane sigh` asks Apple for a profile for the app being published, against the
-# certificate it is about to sign with. Nothing is stored per app, nothing has to be renewed, and
-# no wildcard profile has to cover the namespace. An app that needs a particular profile names the
-# secret holding it in its own `apple-app-store: profile-secret`.
+# App Store provisioning profiles are issued per bundle id. The signing stage requests one during
+# the run with `fastlane sigh`, against the certificate that will sign the package, so none are
+# stored here. An app that needs a particular profile names the secret holding it in its own
+# `apple-app-store: profile-secret`.
+
+# --- Stage B -------------------------------------------------------------------------------
+# Stage B reads the packages stage A built and compares them with the app's own release of the
+# same commit. It does not execute anything it reads.
+
+# Extra paths to ignore when comparing. Signature directories are already excluded.
+ignore-in-comparison:
+  - "*.kotlin_module"
+  - "stamp-cert-sha256"
+
+# What a difference between the two builds does: `block` stops the submission, `advisory` records
+# it and continues. A maintainer re-runs a blocked submission with the label below.
+mismatch: block
+override-label: allow-mismatch
+
+# Scan every file in the package with ClamAV before signing it.
+virus-scan: true
+
+# Permissions the framework and its pieces add to every app, which no app manifest declares.
+# `{id}` stands for the application id. Anything beyond this list and the app's own declarations
+# is reported.
+baseline-permissions:
+  android:
+    - android.permission.INTERNET
+    - android.permission.VIBRATE
+    - "{id}.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
+  ios: []
+
+# The paths stages B and C read out of the app's repository: manifests, store copy and
+# translations. The checkout is sparse, so no source or build script reaches those runners.
+app-data-paths:
+  - Cargo.toml
+  - Day.toml
+  - Day-*.toml
+  - store
+  - store-*
+  - resource/locales
+  - resource-*/locales

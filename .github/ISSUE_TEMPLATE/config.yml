@@ -3,11 +3,11 @@ contact_links:
   - name: Propose an app
     url: https://github.com/orgs/appfair/discussions
     about: >-
-      Before a first submission, open a discussion: what the app is, who maintains it, and how it
-      meets the inclusion criteria. A submission arrives as a pull request once that is settled.
+      Open a discussion before a first submission, covering what the app is, who maintains it,
+      and how it meets the inclusion criteria. The pull request follows once that is settled.
   - name: The inclusion criteria
     url: https://appfair.org/docs/inclusion-criteria/
-    about: What the App Fair publishes, and what it does not.
+    about: Which apps the App Fair accepts.
   - name: Submitting an app
     url: https://appfair.org/docs/submitting/
     about: Store metadata, versions and tags, and what a submission needs.

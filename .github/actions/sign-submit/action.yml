@@ -1,9 +1,9 @@
 name: Sign and submit a validated package
 description: >-
-  Stage C. Put the App Fair's signature on a package that stage B has already read, and hand it to
-  the store. The key material comes from this repository's secrets and is named on the command
-  line, so nothing the app declares decides what is read. No app code runs here: the package is
-  re-signed as an archive, and the listing is staged from the app's text and images.
+  Stage C. Sign a package stage B has already read, and upload it. The key material comes from
+  this repository's secrets and is named on the command line, so the app's own manifest does not
+  decide which credentials are read. The package is re-signed as an archive and the listing is
+  staged from the app's text and images, so none of the app's code runs.
 
 inputs:
   token:
@@ -72,7 +72,7 @@ inputs:
     description: The password for that certificate.
     required: false
   app-id:
-    description: The bundle id being published, which is what a profile is issued for.
+    description: The bundle id being published; profiles are issued per bundle id.
     required: false
   apple-team:
     description: The Apple Developer team id the App Store Connect key belongs to.
@@ -80,8 +80,7 @@ inputs:
   apple-profile-b64:
     description: >-
       Base64 App Store provisioning profile, for an app that needs a particular one. Left empty,
-      the profile is generated from the App Store Connect key at signing time, so the catalog
-      keeps no profile per app and none of them can quietly expire.
+      the profile is requested from Apple at signing time, so the catalog stores none per app.
     required: false
   apple-identity:
     description: >-
@@ -144,9 +143,8 @@ runs:
         set -euo pipefail
         [ -n "${KEYSTORE_B64:-}" ] || { echo "::error::no Play upload keystore in this repository's secrets"; exit 1; }
         echo "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/upload.keystore"
-        # Signed in a directory holding the package alone: `day sign apply` takes the key on the
-        # command line, so the app's own [signing] tables are never read and cannot decide which
-        # of this runner's variables are looked up.
+        # `day sign apply` takes the key on the command line, so the app's [signing] tables are
+        # not read and cannot influence which of this runner's variables are used.
         "$DAY_BIN" sign apply "${{ steps.pick.outputs.package }}" \
           --keystore "$RUNNER_TEMP/upload.keystore" \
           --key-alias "$APPFAIR_KEY_ALIAS"
@@ -173,8 +171,8 @@ runs:
         security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
         rm -f "$RUNNER_TEMP/dist.p12"
         security find-identity -v -p codesigning "$KEYCHAIN"
-        # Name the identity the certificate actually carries, so a mismatch reads here rather
-        # than as codesign's "no identity found" half a minute later.
+        # Compare against the imported certificate, so a mismatch is reported here instead of as
+        # codesign's "no identity found" later in the run.
         security find-identity -v -p codesigning "$KEYCHAIN" | grep -q "${{ inputs.apple-identity }}" || {
           echo "::error::the imported certificate is not \"${{ inputs.apple-identity }}\" — set DAY_APPLE_IDENTITY to the name above"
           exit 1
@@ -199,21 +197,19 @@ runs:
           echo "$PROFILE_B64" | base64 --decode > "$DEST"
           echo "using the stored profile"
         else
-          # Otherwise Apple issues one now, for this app id, against the certificate imported
-          # above. A catalog that generates its profiles keeps none: nothing to store per app,
-          # nothing to renew, and nothing to expire between two releases.
+          # Otherwise Apple issues one now for this app id, against the certificate imported
+          # above, so no profile is stored or renewed here.
           [ -n "${ASC_KEY_ID:-}" ] && [ -n "${ASC_ISSUER:-}" ] && [ -s "${ASC_KEY_PATH:-}" ] || {
             echo "::error::no App Store Connect key, so no profile can be issued for $APP_ID"
             exit 1
           }
           [ -n "${APP_ID:-}" ] || { echo "::error::no app id to issue a profile for"; exit 1; }
-          # fastlane's own API-key file: the three secrets, written where only this job can read
-          # them, never on a command line.
+          # fastlane's API-key file, written where only this job can read it.
           python3 -c 'import json, os, pathlib; print(json.dumps({"key_id": os.environ["ASC_KEY_ID"], "issuer_id": os.environ["ASC_ISSUER"], "key": pathlib.Path(os.environ["ASC_KEY_PATH"]).read_text(), "in_house": False}))' > "$RUNNER_TEMP/asc-key.json"
           chmod 600 "$RUNNER_TEMP/asc-key.json"
           command -v fastlane >/dev/null || sudo gem install fastlane --no-document
-          # `--force` regenerates rather than reusing whatever is on the account, so the profile
-          # always carries the certificate this run is about to sign with.
+          # `--force` regenerates the profile, so it carries the certificate this run signs
+          # with.
           fastlane sigh \
             --api_key_path "$RUNNER_TEMP/asc-key.json" \
             --app_identifier "$APP_ID" \
@@ -225,7 +221,7 @@ runs:
           mv "$RUNNER_TEMP/profiles/appstore.mobileprovision" "$DEST"
           rm -f "$RUNNER_TEMP/asc-key.json"
         fi
-        # What it turned out to be, so a signing failure later can be read against it.
+        # Print what the profile is, for reading against a later signing failure.
         security cms -D -i "$DEST" | plutil -p - | grep -E '"(Name|UUID|TeamIdentifier|ExpirationDate)"' || true
 
     - name: Sign the .ipa with the App Fair's identity
@@ -233,8 +229,8 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        # The profile and the identity are named outright, so the app's [signing.ios] table is
-        # never consulted.
+        # The profile and identity are given explicitly, so the app's [signing.ios] table is not
+        # read.
         "$DAY_BIN" sign apply "${{ steps.pick.outputs.package }}" \
           --profile "$RUNNER_TEMP/appstore.mobileprovision" \
           --identity "${{ inputs.apple-identity }}"
@@ -267,8 +263,8 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        # `day store stage` writes the fastlane tree from the listing's text files. The Fastfile
-        # it writes is day's own; the app supplies the words and the screenshots.
+        # `day store stage` generates the fastlane tree from the listing's text files. The
+        # Fastfile comes from day; the app supplies the copy and the screenshots.
         (cd app-data && "$DAY_BIN" --flavor "${{ inputs.flavor }}" store stage)
         find app-data/build/day/store -maxdepth 3 -type d | head -20
 

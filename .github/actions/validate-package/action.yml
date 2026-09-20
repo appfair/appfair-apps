@@ -1,8 +1,8 @@
 name: Validate a built package
 description: >-
-  Stage B. Read the packages stage A produced, hold them against the app's manifest and against
-  the release the maintainer published from the same tag, and scan them. Every step here reads
-  files; none of them runs anything the app supplied, and no signing key is in reach.
+  Stage B. Read the packages stage A produced, check them against the app's manifest and against
+  the release the app's own CI published from the same commit, and scan them. Every step reads
+  files; none runs the app's code, and no signing key is available to this job.
 
 inputs:
   token:
@@ -12,7 +12,7 @@ inputs:
     description: The app's repository, as owner/name.
     required: true
   ref:
-    description: The commit the submission pins, which is what stage A built.
+    description: The commit the submission pins, and the one stage A built.
     required: true
   tag:
     description: The tag that commit was released under, for finding the release assets.
@@ -45,9 +45,8 @@ inputs:
 runs:
   using: composite
   steps:
-    # The app's manifest, its store copy and its translations. No source, no build scripts, no
-    # project files: a sparse checkout is what keeps this runner free of anything a build tool
-    # would execute, and policy.yaml lists the paths.
+    # The app's manifest, store copy and translations, through a sparse checkout of the paths
+    # policy.yaml lists. Source and build scripts stay off this runner.
     - name: Read the app's manifest paths from policy.yaml
       id: paths
       shell: bash
@@ -144,8 +143,7 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        # The commit the submission pins is what every stage checked out, so it is what this
-        # build's own provenance has to name.
+        # Every stage checked out the pinned commit, so the build's provenance has to name it.
         python3 scripts/queue.py audit \
           --app "${{ inputs.token }}" \
           --report report.json \

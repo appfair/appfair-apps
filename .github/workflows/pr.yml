@@ -1,13 +1,13 @@
 # A submission, checked the way a merge will check it, without the publishing.
 #
-# The stages are separate jobs because the line between them is a security boundary:
+# The stages are separate jobs because the boundary between them is a security boundary:
 #
-#   plan, verify   read this repository and the app's manifest. No app code, no secrets.
-#   build          checks the app out and runs its build. App code, no secrets.
-#   validate       reads what the build produced. No app code, no secrets.
+#   plan, verify   read this repository and the app's manifest; no app code, no secrets
+#   build          checks the app out and runs its build; app code, no secrets
+#   validate       reads what the build produced; no app code, no secrets
 #
-# The publish workflow adds a fourth stage that signs and uploads. It holds the secrets, and like
-# validate it runs nothing the app supplied.
+# The publish workflow adds a fourth stage that signs and uploads. It holds the secrets and, like
+# validate, runs none of the app's code.
 name: pull request
 
 on:
@@ -27,8 +27,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Which submissions this pull request touches, and are they well formed? One job answers both,
-  # so a typo in a file costs one ubuntu minute and stops before any build starts.
+  # Which submissions this pull request touches, and whether they are well formed. One job
+  # answers both, so a typo stops here instead of in a build matrix.
   plan:
     name: plan
     runs-on: ubuntu-latest
@@ -52,10 +52,9 @@ jobs:
           set -euo pipefail
           git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
           python3 scripts/queue.py plan --changed-from "origin/${{ github.base_ref }}"
-      # Who is asking. Who maintains an app is a fact about that app's repository, so this asks
-      # GitHub rather than reading a list from this one. It prints a warning and passes: the
-      # reviewer who merges decides, and an app changing hands or a maintainer stepping in are
-      # ordinary events. The warning puts the question in the thread, where it can be settled.
+      # Who is asking. Maintainership belongs to the app's repository, so this queries GitHub
+      # instead of keeping a list here. It warns and passes: the reviewer who merges decides, and
+      # a maintainer stepping in or an app changing hands are ordinary events.
       - name: Does the author maintain the app?
         if: steps.plan.outputs.count != '0'
         env:
@@ -86,8 +85,8 @@ jobs:
           print("allow=" + ("true" if override in labels else "false"))
           PY
 
-  # Is the app at that tag the app this file claims? Its own manifest is the only thing that can
-  # say, so this job reads the manifest — through a sparse checkout that leaves the source behind.
+  # Whether the app at that commit is the app the file claims. Only the app's manifest can say,
+  # so this job reads it through a sparse checkout that leaves the source behind.
   verify:
     name: verify ${{ matrix.token }}
     needs: plan
@@ -101,8 +100,8 @@ jobs:
       - name: Does ${{ matrix.tag }} exist in ${{ matrix.repo }}?
         run: |
           set -euo pipefail
-          # Asked before the checkout: an unpushed tag or an unreadable repository then says so
-          # in one line, where a checkout failure would bury it forty lines into a log.
+          # Checked before the checkout, so an unpushed tag or an unreadable repository is
+          # reported directly instead of appearing as a checkout failure.
           if ! REF=$(git ls-remote --tags "https://github.com/${{ matrix.repo }}" "refs/tags/${{ matrix.tag }}" 2>&1); then
             echo "::error file=apps/${{ matrix.token }}.yaml::cannot read https://github.com/${{ matrix.repo }} — an app in the catalog has to be public ($REF)"
             exit 1

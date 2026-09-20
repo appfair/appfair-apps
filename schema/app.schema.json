@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://appfair.org/schemas/appfair-apps/app-v1.json",
   "title": "App Fair submission",
-  "description": "One app in the App Fair catalog: which repository and tag to build, how it is built, and where it is published. One file per app under apps/, named for the app token, in YAML. The authority is scripts/queue.py, which enforces this shape plus the rules in policy.yaml; this document lets an editor complete and check the file while it is being written.",
+  "description": "One app in the App Fair catalog: which repository and tag to build, how it is built, and where it is published. One file per app under apps/, named for the app token, in YAML. scripts/queue.py enforces this shape along with the rules in policy.yaml; this document is here so an editor can complete and check the file as it is written.",
   "type": "object",
   "required": [
     "token",
@@ -33,7 +33,7 @@
     "tag": {
       "type": "string",
       "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+([.-][0-9A-Za-z.-]+)?$",
-      "description": "The released tag to build. A submission names a release, and the checks refuse a branch.",
+      "description": "The released tag to build. The checks refuse a branch name here.",
       "examples": [
         "v1.9.0"
       ]
@@ -41,7 +41,7 @@
     "commit": {
       "type": "string",
       "pattern": "^[0-9a-f]{40}$",
-      "description": "The commit that tag points at, in full and in lower case. Every stage checks this out, so a submission reviewed at one commit cannot be published from another when the tag is moved. `scripts/queue.py resolve` prints it.",
+      "description": "The commit that tag points at, in full and in lower case. Every stage checks this out, so moving the tag afterwards does not change what is published. `scripts/queue.py resolve` prints it.",
       "examples": [
         "8b03beeedf19b241954b31678ac8e3fbc816dcc7"
       ]
@@ -49,11 +49,11 @@
     "summary": {
       "type": "string",
       "maxLength": 200,
-      "description": "One line about the app, for people reading the catalog. The stores show the listing in the app's own repository."
+      "description": "One line about the app for people reading the catalog. The stores show the listing from the app's own repository."
     },
     "distribution": {
       "type": "object",
-      "description": "Where this app is published, under the target that builds for it. One build per target, one submission per channel. policy.yaml declares the channels; the ones the queue can publish to today are apple-app-store, google-play-store.",
+      "description": "Where this app is published, keyed by the target that builds for it. Each target is built once and each channel under it gets a submission. policy.yaml declares the channels; apple-app-store and google-play-store work today.",
       "minProperties": 1,
       "additionalProperties": false,
       "properties": {
@@ -91,7 +91,7 @@
       "properties": {
         "submit": {
           "type": "boolean",
-          "description": "Ask this channel to review or release the build, on top of uploading it. Defaults to false, since publishing a binary and asking a store to review it are two decisions."
+          "description": "Ask this channel to review or release the build, on top of uploading it. Defaults to false."
         },
         "profile-secret": {
           "type": "string",
@@ -107,7 +107,7 @@
       "properties": {
         "submit": {
           "type": "boolean",
-          "description": "Ask this channel to review or release the build, on top of uploading it. Defaults to false, since publishing a binary and asking a store to review it are two decisions."
+          "description": "Ask this channel to review or release the build, on top of uploading it. Defaults to false."
         }
       }
     },
@@ -118,7 +118,7 @@
       "properties": {
         "submit": {
           "type": "boolean",
-          "description": "Ask this channel to review or release the build, on top of uploading it. Defaults to false, since publishing a binary and asking a store to review it are two decisions."
+          "description": "Ask this channel to review or release the build, on top of uploading it. Defaults to false."
         }
       }
     },
@@ -135,7 +135,7 @@
       "properties": {
         "submit": {
           "type": "boolean",
-          "description": "Ask this channel to review or release the build, on top of uploading it. Defaults to false, since publishing a binary and asking a store to review it are two decisions."
+          "description": "Ask this channel to review or release the build, on top of uploading it. Defaults to false."
         }
       }
     }

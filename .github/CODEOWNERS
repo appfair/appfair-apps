@@ -1,8 +1,7 @@
-# Who approves what. Every submission and every update to `apps/` passes through a maintainer.
-# The rules, the scripts and the workflows publish with the project's credentials, so they are
-# held to a smaller group.
+# Who approves what. Changes under `apps/` need a maintainer. The rules, the scripts and the
+# workflows run with the project's credentials, so they need an admin.
 #
-# GitHub applies the last matching line, so the more specific rules come last.
+# GitHub applies the last matching line, so the specific rules come last.
 
 *                       @appfair/maintainers
 

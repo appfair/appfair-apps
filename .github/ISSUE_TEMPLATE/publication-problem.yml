@@ -31,6 +31,6 @@ body:
     id: detail
     attributes:
       label: What happened
-      description: The error, and anything already tried. Paste the log text; it is searchable.
+      description: The error and anything you have already tried. Paste log text rather than a screenshot.
     validations:
       required: true

@@ -15,8 +15,8 @@
 
 ## Why it belongs in the catalog
 
-<!-- The inclusion criteria in one or two sentences: what it is for, who it is for, and how it
-     behaves. https://appfair.org/docs/inclusion-criteria/ -->
+<!-- A sentence or two against the inclusion criteria: what the app does and who it is for.
+     https://appfair.org/docs/inclusion-criteria/ -->
 
 ## Confirmations
 

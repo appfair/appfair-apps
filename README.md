@@ -1,19 +1,16 @@
 # appfair-apps
 
-The App Fair's submission queue: one file per app, one pull request per release.
-
-A maintainer who wants their app published, or an existing app updated, changes a file in `apps/`.
-Opening the pull request builds their app, inspects what was built, and compares it with the
-release they published from the same tag. Merging it signs that build with the App Fair's keys and
-hands it to the App Store and Google Play. The app stays in the maintainer's repository, and this
-repository is the queue in front of the stores.
+The App Fair publishes apps to the App Store and Google Play from this repository. Each app has a
+metadata file under `apps/`. A pull request that adds or changes one builds the app and checks the
+build; merging it signs the build with the App Fair's keys and uploads it. The app's source stays
+in its own repository.
 
 ```yaml
 # apps/Faire-Games.yaml
 token: Faire-Games
 title: Fair Games
-tag: v2.0.0
-commit: 8b03beeedf19b241954b31678ac8e3fbc816dcc7
+tag: v2.0.1
+commit: 549bac3f78ce937146b56a7acecc35cb361175e3
 distribution:
   ios-uikit:
     - apple-app-store
@@ -21,192 +18,201 @@ distribution:
     - google-play-store
 ```
 
-The token is also the address: an App Fair app lives at `https://github.com/<token>/<token>`. The
-commit is what every stage checks out, so a tag moved after review changes nothing that gets
-built, signed or published — `scripts/queue.py resolve --token Faire-Games --tag v2.0.0` prints
-both lines.
+An App Fair app lives at `https://github.com/<token>/<token>`, so the token identifies both the
+file and the repository. The pipeline checks out the commit, not the tag, so moving a tag after
+review has no effect on what is built or published. `scripts/queue.py resolve --token Faire-Games
+--tag v2.0.1` prints the `tag` and `commit` lines.
 
-`distribution` is where the app goes, under the target that builds for it: one build per target,
-one submission per channel, and room for the channels the catalog is headed for (AltStore,
-F-Droid, the Samsung store) as each one gains an arm. `policy.yaml` declares them.
+`distribution` lists the channels for each target. `policy.yaml` declares the channels the queue
+can publish to today (`apple-app-store`, `google-play-store`) and the ones it will grow into
+(`altstore`, `f-droid`, `samsung-galaxy-store`).
 
-That is the whole submission. Everything else the build needs — the app's name, icon, version,
-permissions, store listing and screenshots — is read out of the app's own repository at that tag,
-where its maintainer already keeps it.
+Everything else about the app — its name, icon, version, permissions, store listing and
+screenshots — comes from the app's repository at that commit.
 
 ## The three stages
 
-Building a submitted app means running code its author wrote: `build.rs`, Gradle and Xcode build
-phases, whatever its dependencies do while compiling. Checking that build, and signing it, must
-not. So the pipeline is three stages with a line drawn between them, and the line is where the
-jobs end:
+Building a submitted app runs code its author wrote: `build.rs`, Gradle and Xcode build phases,
+and whatever its dependencies do at build time. Checking the result and signing it require none of
+that, so the pipeline splits into three jobs along that boundary.
 
 | stage | what it does | runs app code | holds secrets |
 |---|---|---|---|
-| **A — build** | checks the app out at the tag, lints it, and packs it **unsigned** for each target | yes | no |
-| **B — validate** | reads those packages: inventory and digests, permissions against the manifest, provenance against the tag, a comparison against the maintainer's release, a virus scan | no | no |
-| **C — sign and submit** | puts the App Fair's signature on the package and uploads it to the store | no | yes |
+| **A — build** | checks the app out at the commit, lints it, packs it **unsigned** for each target | yes | no |
+| **B — validate** | reads the packages: inventory and digests, permissions against the manifest, provenance against the commit, comparison against the app's own release, virus scan | no | no |
+| **C — sign and submit** | signs the package with the App Fair's keys and uploads it to each channel | no | yes |
 
-Stage A hands stage B files and nothing else. Stage B opens them as archives. Stage C re-signs an
-archive and uploads it, with the key material named on its own command line, so nothing the app
-declares decides what is read. A job that runs a submitted app's build therefore never sees a key,
-and the job that holds the keys never runs a line the app wrote.
+Stage A hands its packages to stage B, which opens them as archives. Stage C re-signs an archive
+and uploads it, with the key material named on the command line, so the submitted app's manifest
+cannot influence which credentials are read.
 
-What stages B and C read from the app's repository is its manifest, its store copy and its
-translations, through a sparse checkout that `policy.yaml` lists path by path. No source, no build
-scripts, no project files.
+Stages B and C read the app's manifest, store copy and translations through a sparse checkout.
+`policy.yaml` lists those paths. Source, build scripts and project files are left behind.
 
 ## What each stage checks
 
-**Stage A** runs `day lint` before packing, so a submission also says that the project is a
-well-formed Day project: ids resolve, every string is in the catalogue, the store listing is
+**Stage A** runs `day lint` before packing, so a green submission also means the project is a
+well-formed Day project: ids resolve, strings are in the catalogue, and the store listing is
 complete.
 
-**Stage B** answers five questions about the package in hand:
+**Stage B** checks five things about the package:
 
-- What is in it? Every file, with its size and SHA-256, recorded in the run and kept as a report.
-- Is it this app? The bundle id, version and build number, read from the package's own manifest,
-  against what the app's `Day.toml` and its App Fair flavor say they should be.
-- Does it ask for more than it declared? Every permission in the package, against the app's
-  declared permissions mapped through day's own catalogue, plus the baseline the framework adds.
-- Does it match the maintainer's base release? The App Fair builds its own flavor; the app's
-  normal CI publishes the base app. Comparison normalizes each side's declared package id,
-  version/build, display name, URL scheme and package-qualified authorities/permissions. Day's
-  launcher icons, signing records and Android debug-symbol sidecars are excluded. Resource
-  tables and iOS asset catalogs are decoded, so other resources, permissions, components, native
-  binaries and DEX still have to match. `compare.json` lists all normalized/excluded paths.
-  Unexpected differences block publication unless a maintainer explicitly waives them. Missing
-  or ambiguous base assets, unreadable metadata, or an identity inconsistent with the manifest
-  always fail; a flavor package is never substituted for the base release.
-- Is it clean? Every file scanned with ClamAV, and the provenance and SBOM beside the package
-  checked against the commit the tag actually points at, with a build from a dirty checkout
-  refused.
+- **Contents.** Every file, with its size and SHA-256, recorded in the run and kept as a report.
+- **Identity.** The bundle id, version and build number from the package's manifest, against the
+  app's `Day.toml` and its App Fair flavor.
+- **Permissions.** Every permission in the package, against the app's declared permissions mapped
+  through day's catalogue, plus the baseline the framework adds.
+- **Comparison with the app's own release.** The App Fair builds the flavor; the app's CI
+  publishes the base app. The comparison normalizes each side's declared package id, version and
+  build, display name, URL scheme, and package-qualified authorities and permissions. Day's
+  launcher icons, signing records and Android debug-symbol sidecars are excluded. Resource tables
+  and iOS asset catalogs are decoded, so other resources, permissions, components, native binaries
+  and DEX must match. `compare.json` lists every normalized and excluded path. Unexpected
+  differences block publication until a maintainer waives them. Missing or ambiguous base assets,
+  unreadable metadata and an identity that disagrees with the manifest always fail, and a flavor
+  package is never substituted for the base release.
+- **Safety.** ClamAV over every file, and the provenance and SBOM beside the package checked
+  against the commit the submission pins. A build from a dirty checkout is refused.
 
-**Stage C** asks Apple for this app's App Store profile, signs with `day sign apply` — which
-re-signs a package without rebuilding it — and uploads through the fastlane lanes
-`day store stage` writes from the app's listing.
+**Stage C** requests the app's App Store profile from Apple, signs with `day sign apply`, which
+re-signs a package without rebuilding it, and uploads through the fastlane lanes `day store stage`
+generates from the app's listing.
 
 ## What each side supplies
 
 **The maintainer** supplies a public Day project with a release tag, an App Fair flavor carrying
-the canonical bundle id and a version that climbs past what the stores already have, a store
-listing (`store-appfair/`), and an app that meets the
-[inclusion criteria](https://appfair.org/docs/inclusion-criteria/). Their own CI publishes the
-base release this queue compares against. It needs no second workflow and no published flavor
-packages. The queue selects the base artifact name from the unflavored manifest at the pinned
-commit, including Day's unsigned IPA suffix. The source tag and the flavor's store version may
-follow different version sequences.
+the canonical bundle id and a version above what the stores already have, a store listing in
+`store-appfair/`, and an app that meets the
+[inclusion criteria](https://appfair.org/docs/inclusion-criteria/). The base release used for the
+comparison comes from the app's own CI, so its existing release workflow is enough and the flavor's
+packages never have to be published. The queue derives the base artifact name from the unflavored
+manifest at the pinned commit, including Day's unsigned-IPA suffix. The source tag and the flavor's
+store version may follow different sequences.
 
 **The App Fair** supplies the developer accounts, the signing material, the review, and this
-queue. Its secrets live in one job on one stage: a pull request opened from a fork reaches none of
-them, and the publish workflow's `store` environment is what holds them.
+repository. Its secrets live in the publish workflow's `store` environment and are reachable only
+from the signing job, so a pull request opened from a fork cannot get at them.
 
-The identity an app is published under belongs to the App Fair: `org.appfair.app.<token>` on iOS,
-`org.appfair.app.<token with hyphens as underscores>` on Google Play
-([why](https://appfair.org/docs/building/#bundle-id)). An app carries that identity in a
-[Day build flavor](https://daybrite.dev/docs/flavors) — a `Day-appfair.toml` beside its `Day.toml`
-— which keeps the maintainer's own builds under the maintainer's own id. The flavor is named for
-this catalog rather than chosen per submission, so a fork called `gamesfair-apps` builds each
-app's `gamesfair` flavor with nothing to edit.
+Apps are published under `org.appfair.app.<token>` on iOS and `org.appfair.app.<token with
+hyphens as underscores>` on Google Play
+([background](https://appfair.org/docs/building/#bundle-id)). An app carries that identity in a
+[Day build flavor](https://daybrite.dev/docs/flavors), a `Day-appfair.toml` beside its `Day.toml`,
+which leaves the maintainer's own builds under the maintainer's own id. The flavor is named after
+this repository, so a fork called `gamesfair-apps` builds each app's `gamesfair` flavor without
+any edit.
 
 ## Submitting
 
-[CONTRIBUTING.md](CONTRIBUTING.md) is the reference for every key in the file and every rule the
-checks apply. In short:
+[CONTRIBUTING.md](CONTRIBUTING.md) documents every key in the file and every rule applied to it.
+The short version:
 
-1. Open a [discussion](https://github.com/orgs/appfair/discussions) proposing the app, if it is
-   new to the catalog.
-2. Tag a release of the app, with its App Fair flavor's version and build number raised.
-3. Add or edit `apps/<token>.yaml` in a pull request, pinning the tag and its commit.
-4. Watch the checks. They are the same ones that run on merge, so a green pull request is a
-   submission that will publish.
+1. If the app is new to the catalog, propose it in a
+   [discussion](https://github.com/orgs/appfair/discussions) first.
+2. Tag a release of the app, with the App Fair flavor's version and build number raised.
+3. Write the metadata file and open a pull request:
+
+   ```sh
+   scripts/queue.py add Faire-Games      # new app, from its latest release
+   scripts/queue.py update Faire-Games   # existing app, moved to its latest release
+   ```
+
+   Each writes `apps/<token>.yaml` and validates it. Review the result before opening the pull
+   request: the title comes from the app's store listing and the channel list covers everything
+   the catalog publishes to, so both may need editing.
+4. Watch the checks. The same jobs run on merge, so a green pull request will publish.
 
 ## Running the checks locally
 
-Everything the workflows check is in one script, which needs Python and PyYAML:
+The checks are in one script and need Python and PyYAML.
 
 ```sh
 python3 scripts/queue.py validate --all         # every submission against policy.yaml
-python3 scripts/queue.py selftest
-python3 -m unittest discover -s scripts -p 'test_*.py'               # the rules against their own cases
+python3 scripts/queue.py selftest               # the rules against their own cases
+python3 -m unittest discover -s scripts -p 'test_*.py'
 python3 scripts/queue.py wiring                 # every workflow against the actions it calls
 python3 scripts/queue.py plan --app Faire-Games # what the workflows would build
-python3 scripts/queue.py resolve --token Faire-Games --tag v2.0.0   # the tag and commit lines
+python3 scripts/queue.py resolve --token Faire-Games --tag v2.0.1
+python3 scripts/queue.py add Faire-Games
+python3 scripts/queue.py update Faire-Games
+```
 
-# The stages, by hand, against a package you already have.
+The validation steps also run against a package you already have:
+
+```sh
 python3 scripts/queue.py inspect --package fair-games-android-mdc.aab \
   --sibling fair-games-android-mdc.apk --out report.json
-python3 scripts/queue.py compare --ours fair-games-android-mdc.aab --theirs release/day-games-android-mdc.aab \
+python3 scripts/queue.py compare --ours fair-games-android-mdc.aab \
+  --theirs release/day-games-android-mdc.aab \
   --metadata metadata.json --reference-metadata base-metadata.json --target android-mdc
 python3 scripts/queue.py audit --app Faire-Games --report report.json \
   --metadata metadata.json --target android-mdc --sidecars . --expect-commit <sha>
 ```
 
-`base-metadata.json` is `day metadata --json`; `metadata.json` is `day --flavor appfair metadata --json`, read from a checkout of the app's
-manifest paths.
+`metadata.json` is `day --flavor appfair metadata --json` and `base-metadata.json` is
+`day metadata --json`, both from a checkout of the app's manifest paths.
 
 ## Repository secrets
 
-The publish workflow reads these from the `store` environment. When one is missing, the upload it
-belongs to stops and the run says which it was.
+The publish workflow reads these from the `store` environment. A missing secret stops the upload
+that needs it, and the run reports which one was missing.
 
 | secret | what it is |
 |---|---|
 | `DAY_APPLE_CERT_P12`, `DAY_APPLE_CERT_PASSWORD` | the iOS distribution certificate stage C signs with |
 | `DAY_APPLE_IDENTITY` | the name on that certificate, such as `iPhone Distribution: The App Fair Project Inc (25KG25YA3R)`. `codesign` matches it as a prefix, and Apple has issued both `iPhone Distribution` and `Apple Distribution` certificates |
-| `DAY_APPLE_TEAM` | the Apple Developer team id, for the profile the run issues |
-| `DAY_ASC_KEY_ID`, `DAY_ASC_ISSUER`, `DAY_ASC_KEY_B64` | the App Store Connect API key that uploads and manages listings |
+| `DAY_APPLE_TEAM` | the Apple Developer team id used for the provisioning profile |
+| `DAY_ASC_KEY_ID`, `DAY_ASC_ISSUER`, `DAY_ASC_KEY_B64` | the App Store Connect API key for uploads and listings |
 | `DAY_ANDROID_KEYSTORE_B64`, `DAY_ANDROID_KEY_ALIAS`, `DAY_KS_PASS`, `DAY_KEY_PASS` | the Play upload keystore |
-| `DAY_PLAY_JSON_KEY` | the Google Play service-account key `supply` uploads with |
+| `DAY_PLAY_JSON_KEY` | the Google Play service-account key for `supply` |
 
-Apple issues a provisioning profile per bundle id, and this catalog issues one during the run:
-before signing, `fastlane sigh` asks Apple for a profile for the app being published, against the
-certificate it is about to sign with. So there is no profile secret per app, nothing to renew
-between releases, and no wildcard profile over the namespace. An app that needs a particular
-profile names the secret holding it in its own `apple-app-store: profile-secret`.
+Apple issues a provisioning profile per bundle id. This repository requests one during the run:
+`fastlane sigh` asks for a profile for the app being published, against the certificate that will
+sign it. There is then no profile secret per app to store or renew, and no wildcard profile over
+the namespace. An app that requires a specific profile names the secret holding it in its
+`apple-app-store: profile-secret` setting.
 
-The Play upload key has to be the one registered for the existing listing. Replacing it with a new
-key for an app that is already published is what Play refuses.
+The Play upload key must be the key registered for the existing listing. Play rejects an upload
+signed with a different key.
 
-Some of the organization's keys are held as bundles, and the queue takes those too:
-`KEYSTORE_PROPERTIES` (base64 Java properties) carries the keystore's alias and both passwords,
-and `APPLE_APPSTORE_APIKEY` (base64 fastlane key file) carries the App Store Connect id, issuer
-and key. An explicit `DAY_*` secret wins over the bundle that duplicates it, so a catalog can move
-to the newer names one secret at a time. Decoding happens in the signing job alone: the files land
-under `RUNNER_TEMP` readable only by that job, and every value parsed out of a secret is masked
-before it is used.
+Two of the organization's secrets carry several fields at once, and the queue accepts them:
+`KEYSTORE_PROPERTIES` (base64 Java properties) holds the keystore alias and both passwords, and
+`APPLE_APPSTORE_APIKEY` (base64 fastlane key file) holds the App Store Connect id, issuer and key.
+An explicit `DAY_*` secret takes precedence over the bundle that duplicates it, so the newer names
+can be adopted one at a time. Decoding happens only in the signing job: files are written under
+`RUNNER_TEMP` readable by that job alone, and values parsed out of a secret are masked before use.
 
 ## Setting the repository up
 
-Four settings decide whether any of this runs, and none of them lives in a file:
+Four settings are not in any file:
 
-- **Actions policy.** The stages call composite actions from another organization
-  (`daybrite/actions`, for the toolchain and the day CLI). Under *Settings → Actions → General*,
-  "Allow actions and reusable workflows" has to admit `daybrite/*`.
-- **A `store` environment.** The publish workflow's signing job names it, so the store secrets can
-  live there rather than on the repository, with whatever reviewers or wait timer the project
-  wants in front of them.
-- **Branch protection on `main`.** A merge publishes, so `main` takes pull requests only, with
-  review from the owners `.github/CODEOWNERS` names. The `record` job pushes one file
-  (`state/published.json`) straight to `main`; allow the Actions bot to bypass the rule for that
-  path, or drop the job and read the state from the run.
-- **An `allow-mismatch` label.** Its name is in `policy.yaml`. A maintainer adds it to a pull
-  request whose comparison cannot pass for a reason they have understood.
+- **Actions policy.** The stages call composite actions from `daybrite/actions` for the toolchain
+  and the day CLI. Under *Settings → Actions → General*, "Allow actions and reusable workflows"
+  must admit `daybrite/*`.
+- **A `store` environment.** The signing job names it, which keeps the store secrets off the
+  repository and allows reviewers or a wait timer in front of them.
+- **Branch protection on `main`.** A merge publishes, so `main` should accept pull requests only,
+  with review from the owners in `.github/CODEOWNERS`. The `record` job pushes
+  `state/published.json` to `main`; either allow the Actions bot to bypass the rule for that path,
+  or drop the job and read the state from the run.
+- **An `allow-mismatch` label**, named in `policy.yaml`. A maintainer applies it to a pull request
+  whose comparison cannot pass for a known reason.
 
-`workflow_dispatch` on the publish workflow is the manual door: a maintainer can republish any app
-by token after a store-side failure, with no new commit.
+`workflow_dispatch` on the publish workflow republishes any app by token after a store-side
+failure, without a new commit.
 
 ## Layout
 
 ```text
-apps/<token>.yaml               one submission per app — the file most pull requests touch alone
-policy.yaml                     the channels, what the catalog accepts, and what stage B checks
-schema/app.schema.json          the same shape for editors
-scripts/queue.py                validate, plan, verify, authorize, inspect, compare, audit,
-                                wiring, record, selftest — one program, PyYAML its one dependency
-state/published.json            what has been published, written by the publish workflow
-.github/actions/build-app       stage A: the app's own build, unsigned, with no secrets in reach
-.github/actions/validate-package stage B: reads what A built, runs none of it
-.github/actions/sign-submit     stage C: the App Fair's signature, and the store
-.github/workflows/              checks (rules), pr (A + B), publish (A + B + C + record)
+apps/<token>.yaml                one metadata file per app
+policy.yaml                      channels, submission rules, and stage B's settings
+schema/app.schema.json           the same shape, for editors
+scripts/queue.py                 add, update, validate, plan, verify, inspect, compare, audit,
+                                 authorize, wiring, record, resolve, selftest
+scripts/signing_inputs.py        credential normalization for the signing stage
+scripts/package_compare.py       the package comparison stage B runs
+state/published.json             what has been published, written by the publish workflow
+.github/actions/build-app        stage A
+.github/actions/validate-package stage B
+.github/actions/sign-submit      stage C
+.github/workflows/               checks, pr (A + B), publish (A + B + C + record)
 ```
