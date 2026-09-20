@@ -192,9 +192,9 @@ class ComparisonTests(unittest.TestCase):
         self.assertEqual(queue.select_release(self.root, metadata(), "ios-uikit").name,
                          "day-games-ios-uikit-unsigned.ipa")
 
-    def test_source_tag_and_store_version_can_differ_but_commit_must_match(self):
+    def test_the_tag_names_the_version_and_the_commit_must_match(self):
         app = queue.App(self.root / "Faire-Games.yaml", {
-            "token": "Faire-Games", "title": "Fair Games", "tag": "v2.0.1", "commit": "a" * 40,
+            "token": "Faire-Games", "title": "Fair Games", "tag": "v1.9.0", "commit": "a" * 40,
             "distribution": {"ios-uikit": ["apple-app-store"], "android-mdc": ["google-play-store"]}})
         path = self.root / "metadata.json"
         meta = metadata(True)
@@ -203,7 +203,20 @@ class ComparisonTests(unittest.TestCase):
         with patch.object(queue, "catalog", return_value=[app]), patch.dict(
             "os.environ", {"GITHUB_REPOSITORY": "appfair/appfair-apps"}
         ), contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            # v1.9.0 builds 1.9.0, at the commit the submission pins.
             self.assertEqual(queue.cmd_verify(args), 0)
+            # A tag that names another version, whatever the flavor was given.
+            app.data["tag"] = "v2.0.1"
+            self.assertEqual(queue.cmd_verify(args), 1)
+            # A target resolved to a version of its own is caught the same way.
+            app.data["tag"] = "v1.9.0"
+            meta["project"]["resolved"]["android-mdc"]["version"] = "1.9.1"
+            path.write_text(json.dumps(meta))
+            self.assertEqual(queue.cmd_verify(args), 1)
+            meta["project"]["resolved"]["android-mdc"]["version"] = "1.9.0"
+            path.write_text(json.dumps(meta))
+            self.assertEqual(queue.cmd_verify(args), 0)
+            # A tag that has moved off the pinned commit.
             args.tag_commit = "b" * 40
             self.assertEqual(queue.cmd_verify(args), 1)
             args.tag_commit = "a" * 40

@@ -118,13 +118,14 @@ submission.
 ## What each side supplies
 
 **The maintainer** supplies a public Day project with a release tag, an App Fair flavor carrying
-the canonical bundle id and a version above what the stores already have, a store listing in
+the canonical bundle id and a build number above what the stores already have, a store listing in
 `store-appfair/`, and an app that meets the
 [inclusion criteria](https://appfair.org/docs/inclusion-criteria/). The base release used for the
 comparison comes from the app's own CI, so its existing release workflow is enough and the flavor's
 packages never have to be published. The queue derives the base artifact name from the unflavored
-manifest at the pinned commit, including Day's unsigned-IPA suffix. The source tag and the flavor's
-store version may follow different sequences.
+manifest at the pinned commit, including Day's unsigned-IPA suffix. The tag names the version
+being published, so `v2.0.2` publishes 2.0.2 on both stores; a flavor that states a `version` of
+its own is rejected unless the tag agrees with it.
 
 **The App Fair** supplies the developer accounts, the signing material, the review, and this
 repository. Its secrets live in the publish workflow's `store` environment and are reachable only
@@ -145,7 +146,8 @@ The short version:
 
 1. If the app is new to the catalog, propose it in a
    [discussion](https://github.com/orgs/appfair/discussions) first.
-2. Tag a release of the app, with the App Fair flavor's version and build number raised.
+2. Tag a release of the app. The tag names the version published, and the flavor's build number
+   has to climb past what the stores already have.
 3. Write the metadata file and open a pull request:
 
    ```sh

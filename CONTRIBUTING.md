@@ -29,8 +29,7 @@ resources = "resource-appfair"   # optional: the icon the catalog build ships
 [app]
 id = "org.appfair.app.Faire-Games"
 title = "Fair Games"
-version = "1.9.0"
-build = 36
+build = 36          # the store's build counter, past what the stores already have
 artifact = "fair-games"
 targets = ["ios-uikit", "android-mdc"]
 
@@ -57,19 +56,21 @@ The store listing — name, description, keywords, screenshots, release notes, i
 `store-appfair/` directory and its `resource-appfair/` overlay. The queue reads them at the
 submitted commit and does not modify them.
 
-Raise the flavor's `version` and `build` before cutting the tag. Both stores order releases by
-those two numbers and reject anything that repeats or lowers them.
+The tag names the version. `v2.0.2` publishes 2.0.2, so the flavor takes the source version and
+states no `version` of its own; a flavor that does is accepted only when the tag agrees with it.
+
+The flavor's `build` is its own, because the store counts builds per app and the App Fair's record
+has a history the source repository does not. Raise it before cutting the tag: both stores order
+releases by the version and the build, and reject anything that repeats or lowers them.
 
 The tag also needs a release carrying the packages the app's own CI built: an `.aab` for Android,
 an `.ipa` for iOS. These are the **base app's** packages, so the app's existing release workflow
-is enough and the flavor's packages never have to be published. The comparison covers resources, components
-and DEX while normalizing identities and launcher icons and allowing the app's own binary to
-differ, and the flavor's package id, version, permissions and provenance are checked against its
-own manifest.
+is enough and the flavor's packages never have to be published. The comparison covers resources,
+components and DEX while normalizing identities and launcher icons and allowing the app's own
+binary to differ, and the flavor's package id, version, permissions and provenance are checked
+against its own manifest.
 
-The source tag may be `v2.0.1` while the store flavor is version `1.9.0`: the tag pins the source
-commit, and the flavor's version sequence belongs to its store listing. An app built with the
-shared Day workflow already publishes the base packages.
+An app built with the shared Day workflow already publishes the base packages.
 
 ## The file
 
@@ -105,7 +106,7 @@ two lines.
 |---|---|
 | `token` | The app's GitHub organization and repository name, the name of this file, and the last segment of its bundle id. The app lives at `https://github.com/<token>/<token>`. It holds for the life of the app. |
 | `title` | The name on the home screen and in the store, up to 30 characters. Unique in this catalog, and distinct from well-known apps elsewhere. |
-| `tag` | The released tag, `vX.Y.Z`. The release assets hang off it. |
+| `tag` | The released tag, `vX.Y.Z`. It names the version published, so the app at that commit has to build `X.Y.Z`. The release assets hang off it. |
 | `commit` | What that tag points at, in full and in lower case. Every stage checks this out. |
 | `summary` | One line for people reading the catalog. The store listing is the app's own. |
 | `distribution` | The channels for each target. Each target is built once; each channel under it is a submission. |
@@ -164,8 +165,8 @@ A pull request runs the stages a merge runs, stopping before the signing.
 2. **The file**: the shape above, the namespace, the tag pattern, the channels and their targets,
    and the title's uniqueness across the catalog.
 3. **The app against the file**: the pinned commit's manifest, read through a sparse checkout that
-   excludes the source. `day metadata --json` must report `org.appfair.app.<token>`, a version
-   matching the tag, and the targets the file asks for, and the tag must still point at the pinned
+   excludes the source. `day metadata --json` must report `org.appfair.app.<token>`, the version
+   the tag names, and the targets the file asks for, and the tag must still point at the pinned
    commit.
 4. **The reviewer's comment**: for an update, the range between the commit already published and
    the one this pull request proposes, with the number of commits and files, the build and
@@ -245,7 +246,7 @@ that: a release with no notes leaves the reviewer reading commits.
 | where | what to do |
 |---|---|
 | the file's checks | read the annotation, fix the file, push to the same branch |
-| the app's checks | the app and the submission disagree, usually about the flavor's id or version, or the tag has moved off the pinned commit. Fix it in the app, tag again, and update `tag` and `commit` here |
+| the app's checks | the app and the submission disagree, usually about the flavor's id, a version that is not the one the tag names, or a tag that has moved off the pinned commit. Fix it in the app, tag again, and update `tag` and `commit` here |
 | the build | the app does not build at that commit on that target. Fix it in the app's repository |
 | identity or permissions | the package and the manifest disagree; both come from the app, so the fix is there |
 | the comparison | reproduce the difference, or have a maintainer waive it with the label |

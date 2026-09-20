@@ -595,8 +595,22 @@ def cmd_verify(args: argparse.Namespace) -> int:
             f"move, or check with the maintainer"
         )
 
-    # A source release and its store flavor have independent version sequences. The tag is
-    # bound to its commit above; package versions are checked against resolved metadata in audit.
+    # The tag names the version being published. `v2.0.2` publishes 2.0.2, so a release in a
+    # store can be traced back to a tag, and two releases cannot carry the same version. A flavor
+    # that states its own `version` breaks that, and inheriting the source version keeps it.
+    tagged = re.match(r"^v(\d+\.\d+\.\d+)", tag)
+    if tagged:
+        built = {version} | {
+            str(project.get("resolved", {}).get(target, {}).get("version", version))
+            for target in app.data.get("distribution", {})
+        }
+        for other in sorted(v for v in built if v and v != tagged.group(1)):
+            bad(
+                f"{tag} builds version {other!r}. The tag names the version the App Fair "
+                f"publishes, so either tag the release v{other}, or let the flavor take the "
+                f"source version and drop its own `version` from Day-{policy.flavor}.toml"
+            )
+
     declared = set(project.get("targets", []))
     for target in app.data.get("distribution", {}):
         if declared and target not in declared:
@@ -806,6 +820,8 @@ def cmd_add(args: argparse.Namespace) -> int:
         Problem(f"{token}/{token}", str(e)).emit()
         return 1
     title = args.title or app_title(f"{token}/{token}", commit, token, policy.flavor)
+    # git carries no empty directory, so a catalog with no submissions yet has no apps/.
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(submission_text(token, title, tag, commit, policy))
     print(f"wrote    {relative(path)}")
     print(f"         {title}: {tag} ({commit[:12]}), from {how}")

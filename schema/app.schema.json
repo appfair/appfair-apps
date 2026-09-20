@@ -33,7 +33,7 @@
     "tag": {
       "type": "string",
       "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+([.-][0-9A-Za-z.-]+)?$",
-      "description": "The released tag to build. The checks refuse a branch name here.",
+      "description": "The released tag to build. It names the version being published, so the app at that commit has to build the same X.Y.Z. The checks refuse a branch name here.",
       "examples": [
         "v1.9.0"
       ]

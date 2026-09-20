@@ -10,7 +10,8 @@ id-namespace: org.appfair.app.
 token-pattern: '^[A-Za-z][A-Za-z0-9-]{1,38}$'
 
 # Submissions name a released tag, so that what is built is what the maintainer released and is
-# still there later.
+# still there later. The tag also names the version: `verify` refuses a submission whose app
+# builds a version other than the one in the tag.
 tag-pattern: '^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$'
 
 # ...and the commit that tag pointed at when the submission was written. Tags can be moved, so
