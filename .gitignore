@@ -1,0 +1,10 @@
+# Scratch from running the stages by hand.
+/app/
+/app-data/
+/packages/
+/release/
+/metadata.json
+/report.json
+/compare.json
+__pycache__/
+.DS_Store

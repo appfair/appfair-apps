@@ -1,0 +1,206 @@
+# A submission, checked the way a merge will check it, without the publishing.
+#
+# The stages are separate jobs because the line between them is a security boundary:
+#
+#   plan, verify   read this repository and the app's manifest. No app code, no secrets.
+#   build          checks the app out and runs its build. App code, no secrets.
+#   validate       reads what the build produced. No app code, no secrets.
+#
+# The publish workflow adds a fourth stage that signs and uploads. It holds the secrets, and like
+# validate it runs nothing the app supplied.
+name: pull request
+
+on:
+  pull_request:
+    paths:
+      - apps/**
+      - policy.yaml
+      - scripts/**
+      - .github/actions/**
+      - .github/workflows/pr.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  # Which submissions this pull request touches, and are they well formed? One job answers both,
+  # so a typo in a file costs one ubuntu minute and stops before any build starts.
+  plan:
+    name: plan
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      build-matrix: ${{ steps.plan.outputs.build-matrix }}
+      count: ${{ steps.plan.outputs.count }}
+      allow-mismatch: ${{ steps.label.outputs.allow }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The whole history, so the diff against the base branch is possible at all.
+          fetch-depth: 0
+      - name: The catalog's own rules
+        run: python3 scripts/queue.py selftest
+      - name: Every submission still parses
+        run: python3 scripts/queue.py validate --all
+      - name: Plan the submissions this pull request changes
+        id: plan
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
+          python3 scripts/queue.py plan --changed-from "origin/${{ github.base_ref }}"
+      # Who is asking. This prints a warning and passes: the reviewer who merges decides, and an
+      # app changing hands or a maintainer stepping in are ordinary events. The warning puts the
+      # question in the thread, where a reviewer can settle it.
+      - name: Is this the app's maintainer?
+        if: steps.plan.outputs.count != '0'
+        env:
+          MATRIX: ${{ steps.plan.outputs.matrix }}
+        run: |
+          set -euo pipefail
+          TOKENS=$(python3 -c "
+          import json, os
+          print(' '.join(e['token'] for e in json.loads(os.environ['MATRIX'])['include']))
+          ")
+          [ -n "$TOKENS" ] || exit 0
+          # shellcheck disable=SC2086 # a deliberately word-split token list
+          python3 scripts/queue.py authorize $TOKENS \
+            --actor "${{ github.event.pull_request.user.login }}" \
+            --base "origin/${{ github.base_ref }}"
+      # The label that lets a submission past a comparison it cannot pass. A maintainer adds it
+      # after finding out why the two builds differ, and the run records that it was used.
+      - name: Was the comparison waived?
+        id: label
+        env:
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, yaml
+          override = yaml.safe_load(open("policy.yaml"))["override-label"]
+          labels = json.loads(os.environ["LABELS"])
+          print("allow=" + ("true" if override in labels else "false"))
+          PY
+
+  # Is the app at that tag the app this file claims? Its own manifest is the only thing that can
+  # say, so this job reads the manifest — through a sparse checkout that leaves the source behind.
+  verify:
+    name: verify ${{ matrix.token }}
+    needs: plan
+    if: needs.plan.outputs.count != '0'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Does ${{ matrix.tag }} exist in ${{ matrix.repo }}?
+        run: |
+          set -euo pipefail
+          # Asked before the checkout: an unpushed tag or an unreadable repository then says so
+          # in one line, where a checkout failure would bury it forty lines into a log.
+          if ! REF=$(git ls-remote --tags "https://github.com/${{ matrix.repo }}" "refs/tags/${{ matrix.tag }}" 2>&1); then
+            echo "::error file=apps/${{ matrix.token }}.yaml::cannot read https://github.com/${{ matrix.repo }} — an app in the catalog has to be public ($REF)"
+            exit 1
+          fi
+          if [ -z "$REF" ]; then
+            echo "::error file=apps/${{ matrix.token }}.yaml::${{ matrix.repo }} has no tag ${{ matrix.tag }} — tag the release before submitting it"
+            exit 1
+          fi
+          echo "$REF"
+      - name: Read the app's manifest paths from policy.yaml
+        id: paths
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import yaml
+          print("sparse<<EOF")
+          print("\n".join(yaml.safe_load(open("policy.yaml"))["app-data-paths"]))
+          print("EOF")
+          PY
+      - name: Check out the app's manifest at ${{ matrix.tag }}
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ matrix.repo }}
+          ref: ${{ matrix.tag }}
+          path: app-data
+          sparse-checkout: ${{ steps.paths.outputs.sparse }}
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - uses: daybrite/actions/.github/actions/setup-day-cli@main
+        with:
+          version: ${{ matrix.day_version }}
+      - name: Read the app's identity
+        run: |
+          set -euo pipefail
+          FLAVOR="${{ matrix.flavor }}"
+          if [ -n "$FLAVOR" ]; then
+            (cd app-data && "$DAY_BIN" --flavor "$FLAVOR" metadata --json) > metadata.json
+          else
+            (cd app-data && "$DAY_BIN" metadata --json) > metadata.json
+          fi
+          cat metadata.json
+      - name: Check it against the submission
+        run: |
+          python3 scripts/queue.py verify --app "${{ matrix.token }}" --metadata metadata.json
+
+  # Stage A. The one job here that runs code the app supplied: its build.rs, its Gradle and Xcode
+  # build phases, whatever its dependencies do while building. It gets no secrets, and what it
+  # produces is files.
+  build:
+    name: build ${{ matrix.token }} ${{ matrix.target }}
+    needs: [plan, verify]
+    if: needs.plan.outputs.count != '0'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.build-matrix) }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/build-app
+        with:
+          repo: ${{ matrix.repo }}
+          ref: ${{ matrix.tag }}
+          target: ${{ matrix.target }}
+          flavor: ${{ matrix.flavor }}
+          day-version: ${{ matrix.day_version }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: build-${{ matrix.token }}-${{ matrix.target }}
+          path: packages
+          if-no-files-found: error
+
+  # Stage B. Reads what stage A produced, the release the maintainer published from the same tag,
+  # and the app's manifest. It runs on a runner that has never seen the app's source.
+  validate:
+    name: validate ${{ matrix.token }} ${{ matrix.target }}
+    needs: [plan, build]
+    if: needs.plan.outputs.count != '0'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.build-matrix) }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: build-${{ matrix.token }}-${{ matrix.target }}
+          path: packages
+      - uses: ./.github/actions/validate-package
+        with:
+          token: ${{ matrix.token }}
+          repo: ${{ matrix.repo }}
+          ref: ${{ matrix.tag }}
+          target: ${{ matrix.target }}
+          flavor: ${{ matrix.flavor }}
+          day-version: ${{ matrix.day_version }}
+          allow-mismatch: ${{ needs.plan.outputs.allow-mismatch }}
+          github-token: ${{ github.token }}

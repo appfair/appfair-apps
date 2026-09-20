@@ -1,0 +1,247 @@
+# Merging a submission publishes it, through the same three stages the pull request ran, with a
+# fourth added at the end:
+#
+#   plan, verify   read this repository and the app's manifest. No app code, no secrets.
+#   build          checks the app out and runs its build. App code, no secrets.
+#   validate       reads what the build produced. No app code, no secrets.
+#   publish        signs that package and hands it to the store. Secrets, and no app code.
+#
+# The split is the point. The job that runs a submitted app's build never sees a key, and the job
+# that holds the keys never runs a line the app wrote: it re-signs an archive and uploads it.
+#
+# Merging is the approval, so this workflow asks for none. Branch protection on `main` and
+# CODEOWNERS on `apps/` decide who can cause a run.
+name: publish
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - apps/**
+  workflow_dispatch:
+    inputs:
+      app:
+        description: The app token to publish again, as `apps/<token>.yaml` names it.
+        required: true
+        type: string
+      allow-mismatch:
+        description: Accept differences from the maintainer's release for this run.
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    name: plan
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      build-matrix: ${{ steps.plan.outputs.build-matrix }}
+      count: ${{ steps.plan.outputs.count }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: The catalog's own rules
+        run: python3 scripts/queue.py selftest
+      - name: Plan what this merge publishes
+        id: plan
+        run: |
+          set -euo pipefail
+          if [ -n "${{ inputs.app }}" ]; then
+            python3 scripts/queue.py plan --app "${{ inputs.app }}"
+          else
+            python3 scripts/queue.py plan --changed-from "${{ github.event.before }}"
+          fi
+
+  # The same question the pull request asked, asked again on what is now on `main`.
+  verify:
+    name: verify ${{ matrix.token }}
+    needs: plan
+    if: needs.plan.outputs.count != '0'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Read the app's manifest paths from policy.yaml
+        id: paths
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import yaml
+          print("sparse<<EOF")
+          print("\n".join(yaml.safe_load(open("policy.yaml"))["app-data-paths"]))
+          print("EOF")
+          PY
+      - name: Check out the app's manifest at ${{ matrix.tag }}
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ matrix.repo }}
+          ref: ${{ matrix.tag }}
+          path: app-data
+          sparse-checkout: ${{ steps.paths.outputs.sparse }}
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - uses: daybrite/actions/.github/actions/setup-day-cli@main
+        with:
+          version: ${{ matrix.day_version }}
+      - name: Read the app's identity
+        run: |
+          set -euo pipefail
+          FLAVOR="${{ matrix.flavor }}"
+          if [ -n "$FLAVOR" ]; then
+            (cd app-data && "$DAY_BIN" --flavor "$FLAVOR" metadata --json) > metadata.json
+          else
+            (cd app-data && "$DAY_BIN" metadata --json) > metadata.json
+          fi
+      - name: Check it against the submission
+        run: |
+          python3 scripts/queue.py verify --app "${{ matrix.token }}" --metadata metadata.json
+
+  # Stage A: the app's own build, on a runner with no credentials on it.
+  build:
+    name: build ${{ matrix.token }} ${{ matrix.target }}
+    needs: [plan, verify]
+    if: needs.plan.outputs.count != '0'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.build-matrix) }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/build-app
+        with:
+          repo: ${{ matrix.repo }}
+          ref: ${{ matrix.tag }}
+          target: ${{ matrix.target }}
+          flavor: ${{ matrix.flavor }}
+          day-version: ${{ matrix.day_version }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: build-${{ matrix.token }}-${{ matrix.target }}
+          path: packages
+          if-no-files-found: error
+
+  # Stage B: everything that has to be true about the package before anybody signs it.
+  validate:
+    name: validate ${{ matrix.token }} ${{ matrix.target }}
+    needs: [plan, build]
+    if: needs.plan.outputs.count != '0'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.build-matrix) }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: build-${{ matrix.token }}-${{ matrix.target }}
+          path: packages
+      - uses: ./.github/actions/validate-package
+        with:
+          token: ${{ matrix.token }}
+          repo: ${{ matrix.repo }}
+          ref: ${{ matrix.tag }}
+          target: ${{ matrix.target }}
+          flavor: ${{ matrix.flavor }}
+          day-version: ${{ matrix.day_version }}
+          allow-mismatch: ${{ inputs.allow-mismatch && 'true' || 'false' }}
+          github-token: ${{ github.token }}
+
+  # Stage C: the App Fair's signature, and the store. This is the only job in the repository that
+  # can reach the secrets, and the only code it runs is the day CLI, fastlane, and the platform's
+  # own signing tools working on an archive.
+  publish:
+    name: publish ${{ matrix.token }} ${{ matrix.target }}
+    needs: [plan, validate]
+    if: needs.plan.outputs.count != '0'
+    runs-on: ${{ matrix.runner }}
+    environment: store
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      # One store submission at a time, so two merges in a minute cannot race each other into one
+      # store record.
+      max-parallel: 1
+      matrix: ${{ fromJSON(needs.plan.outputs.build-matrix) }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: build-${{ matrix.token }}-${{ matrix.target }}
+          path: packages
+      - uses: ./.github/actions/sign-submit
+        with:
+          token: ${{ matrix.token }}
+          repo: ${{ matrix.repo }}
+          ref: ${{ matrix.tag }}
+          target: ${{ matrix.target }}
+          flavor: ${{ matrix.flavor }}
+          day-version: ${{ matrix.day_version }}
+          lane: ${{ matrix.target == 'ios-uikit' && matrix.ios_lane || matrix.play_lane }}
+          keystore-b64: ${{ secrets.DAY_ANDROID_KEYSTORE_B64 }}
+          key-alias: ${{ secrets.DAY_ANDROID_KEY_ALIAS }}
+          keystore-password: ${{ secrets.DAY_KS_PASS }}
+          key-password: ${{ secrets.DAY_KEY_PASS }}
+          play-json-key: ${{ secrets.DAY_PLAY_JSON_KEY }}
+          apple-cert-p12: ${{ secrets.DAY_APPLE_CERT_P12 }}
+          apple-cert-password: ${{ secrets.DAY_APPLE_CERT_PASSWORD }}
+          # A provisioning profile is issued per bundle id, so an app may name a secret of its
+          # own; the catalog's shared profile is the default.
+          apple-profile-b64: ${{ secrets[matrix.ios_profile_secret] || secrets.DAY_IOS_PROFILE_B64 }}
+          asc-key-id: ${{ secrets.DAY_ASC_KEY_ID }}
+          asc-issuer: ${{ secrets.DAY_ASC_ISSUER }}
+          asc-key-b64: ${{ secrets.DAY_ASC_KEY_B64 }}
+
+  # What was published, written back into the repository, so the catalog's state is a file
+  # anybody can open.
+  record:
+    name: record ${{ matrix.token }}
+    needs: [plan, publish]
+    if: ${{ !cancelled() && needs.publish.result == 'success' && needs.plan.outputs.count != '0' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: record-state
+      cancel-in-progress: false
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Write the publication into state/published.json
+        run: |
+          set -euo pipefail
+          STORES=""
+          # Full `if` statements: under `set -e` a bare `cond && action` whose condition is false
+          # ends the step, and nothing would be written.
+          if [ "${{ matrix.upload_ios }}" = true ]; then STORES="apple"; fi
+          if [ "${{ matrix.upload_play }}" = true ]; then STORES="${STORES:+$STORES,}play"; fi
+          python3 scripts/queue.py record \
+            --app "${{ matrix.token }}" \
+            --tag "${{ matrix.tag }}" \
+            --stores "$STORES" \
+            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+      - name: Commit it
+        run: |
+          set -euo pipefail
+          git config user.name "appfair-bot"
+          git config user.email "bot@appfair.org"
+          git add state/published.json
+          git diff --cached --quiet && { echo "nothing changed"; exit 0; }
+          # `paths: apps/**` on this workflow keeps this commit from starting another run.
+          git commit -m "Record ${{ matrix.token }} ${{ matrix.tag }} as published"
+          git push origin HEAD:main

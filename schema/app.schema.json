@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://appfair.org/schemas/appfair-apps/app-v1.json",
+  "title": "App Fair submission",
+  "description": "One app in the App Fair catalog: which repository and tag to build, how it is built, and which stores it is published to. One file per app under apps/, named for the app token, in YAML. The authority is scripts/queue.py, which enforces this shape plus the rules in policy.yaml; this document lets an editor complete and check the file while it is being written.",
+  "type": "object",
+  "required": [
+    "token",
+    "title",
+    "repo",
+    "tag",
+    "targets",
+    "maintainers",
+    "stores"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "token": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9-]{1,38}$",
+      "description": "The app token: the name of its GitHub organization and repository, the file name here, and the last segment of its bundle id (org.appfair.app.<token>). It holds for the life of the app.",
+      "examples": [
+        "Faire-Games"
+      ]
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 30,
+      "description": "The name people see on their device and in the store. Unique in the catalog.",
+      "examples": [
+        "Fair Games"
+      ]
+    },
+    "repo": {
+      "type": "string",
+      "pattern": "^https://github\\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/?$",
+      "description": "The app's public GitHub repository, whose name is the token.",
+      "examples": [
+        "https://github.com/Faire-Games/Faire-Games"
+      ]
+    },
+    "tag": {
+      "type": "string",
+      "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+([.-][0-9A-Za-z.-]+)?$",
+      "description": "The released tag to build. A submission names a release, and the checks refuse a branch.",
+      "examples": [
+        "v1.9.0"
+      ]
+    },
+    "flavor": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "description": "The Day build flavor carrying the App Fair identity — Day-<flavor>.toml in the app's repository, stating the canonical bundle id, the display name and the version that continues the app's store history. Left out for an app whose Day.toml already builds under org.appfair.app.<token>.",
+      "examples": [
+        "appfair"
+      ]
+    },
+    "summary": {
+      "type": "string",
+      "maxLength": 200,
+      "description": "One line about the app, for people reading the catalog. The stores show the listing in the app's own repository."
+    },
+    "targets": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "ios-uikit",
+          "android-mdc"
+        ]
+      },
+      "description": "What the queue builds and submits. Each target must have its store turned on, and each store its target."
+    },
+    "maintainers": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9-]{0,38}$"
+      },
+      "description": "The GitHub accounts that may change this file, with the @ left off. The first is the maintainer of record."
+    },
+    "stores": {
+      "type": "object",
+      "description": "Where this app is published. At least one has to be true.",
+      "additionalProperties": false,
+      "properties": {
+        "apple": {
+          "type": "boolean",
+          "description": "The Apple App Store (needs the ios-uikit target)."
+        },
+        "play": {
+          "type": "boolean",
+          "description": "Google Play (needs the android-mdc target)."
+        }
+      }
+    },
+    "apple": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "profile-secret": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]*$",
+          "description": "The NAME of the repository secret holding this app's base64 App Store provisioning profile, when it differs from the catalog's default. The profile itself belongs in the secret."
+        },
+        "submit": {
+          "type": "boolean",
+          "description": "Submit the uploaded build for App Review, on top of uploading it. Defaults to false, since publishing a binary and asking Apple to review it are two decisions."
+        }
+      }
+    },
+    "play": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "submit": {
+          "type": "boolean",
+          "description": "Promote the uploaded build to production, on top of leaving it on the internal track as a draft. Defaults to false."
+        }
+      }
+    }
+  }
+}

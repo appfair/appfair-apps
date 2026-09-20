@@ -1,0 +1,51 @@
+# The catalog checking itself: the queue's rules against their own cases, every submission against
+# those rules, every workflow through a YAML parser, and every action call against the action it
+# names. It takes seconds on one runner and runs on anything that touches this repository, which
+# covers a change to the rules themselves — pr.yml exercises those only against whatever app a
+# pull request happens to touch.
+name: checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Daily, because the actions this queue calls live in another repository and can change
+    # under it. A red check here is cheaper than a failed submission.
+    - cron: "40 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: The queue's own cases
+        run: python3 scripts/queue.py selftest
+      - name: Every submission in the catalog
+        run: python3 scripts/queue.py validate --all
+      - name: Every workflow parses
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import pathlib, sys, yaml
+          bad = 0
+          paths = sorted(pathlib.Path(".github/workflows").glob("*.yml"))
+          paths += sorted(pathlib.Path(".github/actions").glob("*/action.yml"))
+          for path in paths:
+              try:
+                  yaml.safe_load(path.read_text())
+                  print(f"ok   {path}")
+              except yaml.YAMLError as e:
+                  bad += 1
+                  print(f"::error file={path}::{e}")
+          sys.exit(1 if bad else 0)
+          PY
+      - name: Every action call matches the action it names
+        run: python3 scripts/queue.py wiring
+      - name: The state file is the one the scripts write
+        run: python3 -c "import json; json.load(open('state/published.json'))"

@@ -1,0 +1,183 @@
+name: Validate a built package
+description: >-
+  Stage B. Read the packages stage A produced, hold them against the app's manifest and against
+  the release the maintainer published from the same tag, and scan them. Every step here reads
+  files; none of them runs anything the app supplied, and no signing key is in reach.
+
+inputs:
+  token:
+    description: The app token, as apps/<token>.yaml names it.
+    required: true
+  repo:
+    description: The app's repository, as owner/name.
+    required: true
+  ref:
+    description: The tag the submission names.
+    required: true
+  target:
+    description: The Day target these packages were built for.
+    required: true
+  flavor:
+    description: The Day build flavor the submission names.
+    required: false
+    default: appfair
+  packages:
+    description: The directory holding the packages and their sidecars.
+    required: false
+    default: packages
+  day-version:
+    description: Which day CLI reads the app's manifest.
+    required: false
+    default: main
+  allow-mismatch:
+    description: >-
+      Accept differences from the maintainer's release, for a re-run a maintainer has labelled
+      after understanding the cause.
+    required: false
+    default: "false"
+  github-token:
+    description: A token that can read the app's public releases.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    # The app's manifest, its store copy and its translations. No source, no build scripts, no
+    # project files: a sparse checkout is what keeps this runner free of anything a build tool
+    # would execute, and policy.yaml lists the paths.
+    - name: Read the app's manifest paths from policy.yaml
+      id: paths
+      shell: bash
+      run: |
+        set -euo pipefail
+        python3 - <<'PY' >> "$GITHUB_OUTPUT"
+        import os, yaml
+        paths = yaml.safe_load(open("policy.yaml"))["app-data-paths"]
+        print("sparse<<EOF")
+        print("\n".join(paths))
+        print("EOF")
+        PY
+
+    - name: Check out the app's manifest at ${{ inputs.ref }}
+      uses: actions/checkout@v7
+      with:
+        repository: ${{ inputs.repo }}
+        ref: ${{ inputs.ref }}
+        path: app-data
+        sparse-checkout: ${{ steps.paths.outputs.sparse }}
+        sparse-checkout-cone-mode: false
+        persist-credentials: false
+
+    - uses: daybrite/actions/.github/actions/setup-day-cli@main
+      with:
+        version: ${{ inputs.day-version }}
+
+    - name: What the app's manifest declares
+      shell: bash
+      run: |
+        set -euo pipefail
+        # `day metadata` reads Day.toml, the flavor manifest and Cargo.toml. It builds nothing and
+        # runs nothing from the app.
+        (cd app-data && "$DAY_BIN" --flavor "${{ inputs.flavor }}" metadata --json) > metadata.json
+        python3 -c "import json;d=json.load(open('metadata.json'));p=d['project'];print('manifest:',p['id'],p['version'],p['build'])"
+
+    - name: Name the packages
+      id: pick
+      shell: bash
+      run: |
+        set -euo pipefail
+        case "${{ inputs.target }}" in
+          android-mdc) primary=$(ls "${{ inputs.packages }}"/*.aab | head -1)
+                       sibling=$(ls "${{ inputs.packages }}"/*.apk 2>/dev/null | head -1 || true) ;;
+          ios-uikit)   primary=$(ls "${{ inputs.packages }}"/*.ipa | head -1)
+                       sibling="" ;;
+          *) echo "::error::unknown target ${{ inputs.target }}"; exit 1 ;;
+        esac
+        [ -n "$primary" ] || { echo "::error::no package for ${{ inputs.target }} in ${{ inputs.packages }}"; exit 1; }
+        echo "primary=$primary" >> "$GITHUB_OUTPUT"
+        echo "sibling=$sibling" >> "$GITHUB_OUTPUT"
+        echo "ext=${primary##*.}" >> "$GITHUB_OUTPUT"
+
+    - name: What is inside it
+      shell: bash
+      run: |
+        set -euo pipefail
+        python3 scripts/queue.py inspect \
+          --package "${{ steps.pick.outputs.primary }}" \
+          ${{ steps.pick.outputs.sibling && format('--sibling {0}', steps.pick.outputs.sibling) || '' }} \
+          --out report.json
+
+    - name: The maintainer's release of the same tag
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: |
+        set -euo pipefail
+        mkdir -p release
+        # The App Fair ships the build above. This downloads what the maintainer built from the
+        # same tag so the two can be compared; a release that carries no counterpart leaves the
+        # submission unverifiable, which the comparison step reports.
+        if ! gh release download "${{ inputs.ref }}" --repo "${{ inputs.repo }}" \
+             --pattern "*.${{ steps.pick.outputs.ext }}" --dir release 2>release.err; then
+          echo "::warning::no ${{ steps.pick.outputs.ext }} asset on ${{ inputs.repo }} ${{ inputs.ref }}: $(cat release.err)"
+        fi
+        ls -l release || true
+
+    - name: Compare the two builds
+      shell: bash
+      run: |
+        set -euo pipefail
+        theirs=$(ls release/*.${{ steps.pick.outputs.ext }} 2>/dev/null | head -1 || true)
+        if [ -z "$theirs" ]; then
+          if [ "${{ inputs.allow-mismatch }}" = "true" ]; then
+            echo "::warning::the release carries no .${{ steps.pick.outputs.ext }}; the comparison was waived by label"
+            exit 0
+          fi
+          echo "::error file=apps/${{ inputs.token }}.yaml::${{ inputs.repo }} ${{ inputs.ref }} publishes no .${{ steps.pick.outputs.ext }}, so this build has nothing to be checked against"
+          exit 1
+        fi
+        python3 scripts/queue.py compare \
+          --ours "${{ steps.pick.outputs.primary }}" --theirs "$theirs" --out compare.json \
+          ${{ inputs.allow-mismatch == 'true' && '--allow-mismatch' || '' }}
+
+    - name: Hold it against the submission and the manifest
+      shell: bash
+      run: |
+        set -euo pipefail
+        COMMIT=$(git ls-remote "https://github.com/${{ inputs.repo }}" "refs/tags/${{ inputs.ref }}^{}" | cut -f1)
+        [ -n "$COMMIT" ] || COMMIT=$(git ls-remote "https://github.com/${{ inputs.repo }}" "refs/tags/${{ inputs.ref }}" | cut -f1)
+        echo "tag ${{ inputs.ref }} is $COMMIT"
+        python3 scripts/queue.py audit \
+          --app "${{ inputs.token }}" \
+          --report report.json \
+          --metadata metadata.json \
+          --target "${{ inputs.target }}" \
+          --sidecars "${{ inputs.packages }}" \
+          --expect-commit "$COMMIT"
+
+    - name: Scan it
+      shell: bash
+      run: |
+        set -euo pipefail
+        SCAN=$(python3 -c "import yaml;print(str(yaml.safe_load(open('policy.yaml')).get('virus-scan', True)).lower())")
+        if [ "$SCAN" != "true" ]; then
+          echo "virus scanning is off in policy.yaml"
+          exit 0
+        fi
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq clamav >/dev/null
+        sudo systemctl stop clamav-freshclam 2>/dev/null || true
+        sudo freshclam --quiet
+        # clamscan reads archives itself, so the packages are scanned where they lie and nothing
+        # is unpacked into a place anything might run it from.
+        clamscan --recursive --infected --max-filesize=4000M --max-scansize=4000M "${{ inputs.packages }}"
+
+    - name: Keep the reports
+      uses: actions/upload-artifact@v7
+      with:
+        name: validation-${{ inputs.token }}-${{ inputs.target }}
+        path: |
+          report.json
+          compare.json
+          metadata.json
+        if-no-files-found: warn

@@ -1,0 +1,36 @@
+name: Publication problem
+description: A submission failed to build, failed to upload, or was rejected by a store.
+labels: ["publication"]
+body:
+  - type: input
+    id: token
+    attributes:
+      label: App token
+      placeholder: Faire-Games
+    validations:
+      required: true
+  - type: input
+    id: run
+    attributes:
+      label: The workflow run
+      description: The failing run in this repository, if there is one.
+      placeholder: https://github.com/appfair/appfair-apps/actions/runs/…
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where it failed
+      options:
+        - The submission checks (validate or verify)
+        - The build
+        - The App Store upload
+        - The Google Play upload
+        - After upload — a store rejected the binary
+    validations:
+      required: true
+  - type: textarea
+    id: detail
+    attributes:
+      label: What happened
+      description: The error, and anything already tried. Paste the log text; it is searchable.
+    validations:
+      required: true
