@@ -6,7 +6,7 @@
 *                       @appfair/maintainers
 
 /apps/                  @appfair/maintainers
-/policy.yaml            @appfair/admins
-/scripts/               @appfair/admins
-/.github/workflows/     @appfair/admins
-/.github/CODEOWNERS     @appfair/admins
+/policy.yaml            @appfair/admin
+/scripts/               @appfair/admin
+/.github/workflows/     @appfair/admin
+/.github/CODEOWNERS     @appfair/admin
