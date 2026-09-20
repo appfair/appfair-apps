@@ -188,7 +188,7 @@ jobs:
     name: validate ${{ matrix.token }} ${{ matrix.target }}
     needs: [plan, build]
     if: needs.plan.outputs.count != '0'
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
     strategy:

@@ -99,7 +99,6 @@ class Policy:
     channels: dict[str, Channel]
     flavor: str
     day_version: str
-    default_ios_profile_secret: str
 
     @staticmethod
     def load(path: Path | None = None) -> "Policy":
@@ -123,9 +122,6 @@ class Policy:
             channels=channels,
             flavor=str(raw.get("flavor") or default_flavor()),
             day_version=str(raw.get("day-version", "main")),
-            default_ios_profile_secret=raw.get(
-                "default-ios-profile-secret", "DAY_IOS_PROFILE_B64"
-            ),
         )
 
     @property
@@ -448,10 +444,11 @@ def publish_rows(app: App, entry: dict, policy: Policy) -> list[dict]:
                 # where publishing a binary and asking a store to review it are two decisions.
                 # `submit: true` under the channel runs the lane that asks for review.
                 lane=channel.submit_lane if settings.get("submit") else channel.lane,
-                # Only a channel that signs with a provisioning profile carries one; the rest
-                # leave the field empty rather than name a secret nothing reads.
+                # Empty unless the submission named a secret of its own. The Apple channel
+                # issues a profile during the run from the catalog's App Store Connect key, so
+                # an app that stores one is the exception rather than the rule.
                 profile_secret=(
-                    str(settings.get("profile-secret", policy.default_ios_profile_secret))
+                    str(settings.get("profile-secret", ""))
                     if "profile-secret" in channel.options
                     else ""
                 ),
@@ -545,6 +542,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
     project = metadata.get("project", {})
     resolved_id = project.get("id", "")
     version = str(project.get("version", ""))
+    tag = str(app.data.get("tag", ""))
     expected_id = f"{policy.id_namespace}{app.token}"
 
     def bad(message: str) -> None:
@@ -557,26 +555,28 @@ def cmd_verify(args: argparse.Namespace) -> int:
             f"https://appfair.org/docs/building/#bundle-id"
         )
 
+    android = project.get("resolved", {}).get("android-mdc", {})
+    if "android-mdc" in app.data.get("distribution", {}):
+        expected_android = f"{policy.id_namespace}{app.token.replace('-', '_')}"
+        if android.get("id") != expected_android:
+            bad(f"Android must build under {expected_android!r}, not {android.get('id')!r}")
+
     # The tag still points at the commit this submission was written against. A tag can be moved,
     # and a submission reviewed at one commit and published from another would be a review of
     # nothing. The stages check the commit out, so a moved tag changes no bytes; this says so out
     # loud, because a moved tag usually means the maintainer meant to submit something else.
     submitted = str(app.data.get("commit", ""))
-    if args.tag_commit and submitted and args.tag_commit != submitted:
+    if args.tag_commit is not None and submitted and args.tag_commit != submitted:
         bad(
             f"the tag now points at {args.tag_commit[:12]}, and this submission names "
             f"{submitted[:12]}. The build follows the commit; update `commit` when the tag was "
             f"moved on purpose, and ask the maintainer when it was not"
         )
 
-    # The tag names the version: `v1.9.0` builds 1.9.0. Stores order releases by that number, so a
-    # tag disagreeing with the manifest is a submission of something other than what it says.
-    tag = str(app.data.get("tag", ""))
-    if tag[1:] and version and not tag[1:].startswith(version):
-        bad(f"tag {tag} disagrees with the version the app builds ({version})")
-
+    # A source release and its store flavor have independent version sequences. The tag is
+    # bound to its commit above; package versions are checked against resolved metadata in audit.
     declared = set(project.get("targets", []))
-    for target in app.data.get("targets", []):
+    for target in app.data.get("distribution", {}):
         if declared and target not in declared:
             bad(
                 f"targets include {target}, which the app does not declare "
@@ -945,24 +945,26 @@ def write_summary(lines: list[str]) -> None:
 
 
 def cmd_compare(args: argparse.Namespace) -> int:
-    """Compare two packages file by file, ignoring what signing writes.
-
-    The App Fair builds the app itself and publishes that build. This asks the other question: a
-    release the maintainer built from the same tag should contain the same files. Where the two
-    differ, something about the build is unreproducible, and the run says which files.
-    """
+    """Compare the queue's flavored payload with the base release, normalizing declared metadata."""
     import fnmatch
+    from package_compare import payload
 
     policy_raw = load_yaml(ROOT / "policy.yaml")
     ignore = list(policy_raw.get("ignore-in-comparison", []))
-
-    def ignored(path: str) -> bool:
-        return path.startswith(SIGNATURE_PATHS) or any(fnmatch.fnmatch(path, p) for p in ignore)
-
-    ours = {e["path"]: e["sha256"] for e in package_entries(Path(args.ours)) }
-    theirs = {e["path"]: e["sha256"] for e in package_entries(Path(args.theirs))}
-    ours = {k: v for k, v in ours.items() if not ignored(k)}
-    theirs = {k: v for k, v in theirs.items() if not ignored(k)}
+    options = [args.metadata, args.reference_metadata, args.target]
+    if any(options) and not all(options):
+        Problem("compare", "--metadata, --reference-metadata and --target must be supplied together").emit()
+        return 1
+    try:
+        ours_meta = json.loads(Path(args.metadata).read_text()) if args.metadata else None
+        theirs_meta = json.loads(Path(args.reference_metadata).read_text()) if args.reference_metadata else None
+        ours, normalized_ours = payload(Path(args.ours), ours_meta, args.target, find_aapt2())
+        theirs, normalized_theirs = payload(Path(args.theirs), theirs_meta, args.target, find_aapt2())
+    except (ValueError, OSError, subprocess.SubprocessError) as error:
+        Problem("compare", str(error)).emit()
+        return 1
+    ours = {k: v for k, v in ours.items() if not any(fnmatch.fnmatch(k, p) for p in ignore)}
+    theirs = {k: v for k, v in theirs.items() if not any(fnmatch.fnmatch(k, p) for p in ignore)}
 
     only_ours = sorted(set(ours) - set(theirs))
     only_theirs = sorted(set(theirs) - set(ours))
@@ -972,6 +974,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
     result = {
         "ours": Path(args.ours).name,
         "theirs": Path(args.theirs).name,
+        "normalized-or-excluded": {"ours": normalized_ours, "theirs": normalized_theirs},
         "identical": same,
         "changed": changed,
         "only-in-ours": only_ours,
@@ -1011,6 +1014,29 @@ def cmd_compare(args: argparse.Namespace) -> int:
         f"re-run with the override label once the cause is understood",
     ).emit()
     return 1
+
+
+def select_release(directory: Path, metadata: dict, target: str) -> Path:
+    from package_compare import identity
+    app = identity(metadata, target)
+    stem = app.get("artifact") or metadata["project"]["artifact"]
+    ext = {"android-mdc": "aab", "ios-uikit": "ipa"}[target]
+    suffixes = ["", "-unsigned"] if target == "ios-uikit" else [""]
+    names = {f"{prefix}-{target}{suffix}.{ext}"
+             for prefix in [stem, f"{stem}-{app['version']}"] for suffix in suffixes}
+    matches = [p for p in directory.iterdir() if p.name in names and p.is_file()]
+    if len(matches) != 1:
+        raise ValueError(f"expected exactly one base release package ({', '.join(sorted(names))}); found {len(matches)}")
+    return matches[0]
+
+
+def cmd_select_release(args: argparse.Namespace) -> int:
+    try:
+        print(select_release(Path(args.directory), json.loads(Path(args.metadata).read_text()), args.target))
+        return 0
+    except (ValueError, OSError) as error:
+        Problem("release", str(error)).emit()
+        return 1
 
 
 # --------------------------------------------------------------------------------------------
@@ -1061,7 +1087,7 @@ def cmd_audit(args: argparse.Namespace) -> int:
     project = metadata.get("project", {})
     resolved = project.get("resolved", {}).get(args.target, {}) if args.target else {}
     expected_id = resolved.get("id") or project.get("id", "")
-    expected_version = str(project.get("version", ""))
+    expected_version = str(resolved.get("version") or project.get("version", ""))
     expected_build = str(resolved.get("build") or project.get("build", ""))
 
     # 1. The package is the app the submission names, in the version the tag names.
@@ -1479,12 +1505,22 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--ours", required=True, help="the package this queue built")
     p.add_argument("--theirs", required=True, help="the package attached to the app's release")
     p.add_argument("--out", help="where to write the comparison")
+    p.add_argument("--metadata", help="the queue flavor's day metadata JSON")
+    p.add_argument("--reference-metadata", help="the base release's day metadata JSON")
+    p.add_argument("--target", choices=["android-mdc", "ios-uikit"])
+
     p.add_argument(
         "--allow-mismatch",
         action="store_true",
         help="report differences and pass, for a re-run a maintainer has labelled",
     )
     p.set_defaults(func=cmd_compare)
+
+    p = sub.add_parser("select-release", help="select the base app's release package unambiguously")
+    p.add_argument("--directory", required=True)
+    p.add_argument("--metadata", required=True)
+    p.add_argument("--target", required=True, choices=["android-mdc", "ios-uikit"])
+    p.set_defaults(func=cmd_select_release)
 
     p = sub.add_parser("audit", help="hold a package against the submission and the manifest")
     p.add_argument("--app", required=True, help="the app token")

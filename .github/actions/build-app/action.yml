@@ -81,13 +81,14 @@ runs:
       shell: bash
       env:
         DAY_VERBOSE: "1"
+        DAY_ANDROID_ABI: arm64-v8a,x86_64
       run: |
         set -euo pipefail
         # `--no-sign` is what makes the handoff safe: the package that leaves this stage carries
         # no signature at all, and the App Fair's identity is applied later, where the app's code
         # never runs. The App Fair's keys are absent from this job entirely.
         "$DAY_BIN" --flavor "${{ inputs.flavor }}" pack \
-          -p "${{ inputs.target }}" --no-sign --no-version-in-name --format json | tee pack.json
+          -p "${{ inputs.target }}" --no-sign --no-version-in-name --format json | tee "$RUNNER_TEMP/pack-${{ inputs.target }}.json"
 
     - name: Collect the packages
       shell: bash

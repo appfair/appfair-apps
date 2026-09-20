@@ -71,48 +71,8 @@ channels:
 # version freezes what the catalog builds against.
 day-version: main
 
-# The secret holding the base64 App Store provisioning profile. A submission may name a different
-# secret in its `apple.profile-secret`; this is the default, and the only value a first-time
-# submission should need.
-default-ios-profile-secret: DAY_IOS_PROFILE_B64
-
-# --- What the validation stage checks -------------------------------------------------------
-# Stage B reads the packages stage A built and compares them with the release the maintainer
-# published from the same tag. It runs none of what it reads.
-
-# Paths inside a package that signing writes, and anything else whose difference says nothing
-# about the build. The signature directories are excluded already; these are the extras.
-ignore-in-comparison:
-  - "*.kotlin_module"
-  - "stamp-cert-sha256"
-
-# What happens when the two builds differ: `block` stops the submission, `advisory` records the
-# differences and continues. A maintainer re-runs a blocked submission with the label below once
-# the cause is understood.
-mismatch: block
-override-label: allow-mismatch
-
-# Scan every file in the package with ClamAV before signing it.
-virus-scan: true
-
-# Permissions the framework and its pieces add to every app, which an app's manifest therefore
-# never declares. `{id}` stands for the application id. Anything a package asks for beyond this
-# list and the app's own declarations is a finding.
-baseline-permissions:
-  android:
-    - android.permission.INTERNET
-    - android.permission.VIBRATE
-    - "{id}.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
-  ios: []
-
-# The paths stages B and C read out of the app's repository. They hold manifests, store copy and
-# translations, and no source, no build scripts and no project files that a build tool would
-# execute. The checkout is sparse, so nothing else reaches those runners.
-app-data-paths:
-  - Cargo.toml
-  - Day.toml
-  - Day-*.toml
-  - store
-  - store-*
-  - resource/locales
-  - resource-*/locales
+# An App Store provisioning profile is issued per bundle id, and this catalog issues one during
+# the run: `fastlane sigh` asks Apple for a profile for the app being published, against the
+# certificate it is about to sign with. Nothing is stored per app, nothing has to be renewed, and
+# no wildcard profile has to cover the namespace. An app that needs a particular profile names the
+# secret holding it in its own `apple-app-store: profile-secret`.

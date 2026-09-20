@@ -147,7 +147,7 @@ jobs:
     name: validate ${{ matrix.token }} ${{ matrix.target }}
     needs: [plan, build]
     if: needs.plan.outputs.count != '0'
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
     strategy:
@@ -204,16 +204,26 @@ jobs:
           flavor: ${{ matrix.flavor }}
           day-version: ${{ matrix.day_version }}
           lane: ${{ matrix.lane }}
-          keystore-b64: ${{ secrets.DAY_ANDROID_KEYSTORE_B64 }}
+          keystore-b64: ${{ secrets.DAY_ANDROID_KEYSTORE_B64 || secrets.KEYSTORE_JKS }}
+          keystore-properties-b64: ${{ secrets.KEYSTORE_PROPERTIES }}
           key-alias: ${{ secrets.DAY_ANDROID_KEY_ALIAS }}
           keystore-password: ${{ secrets.DAY_KS_PASS }}
           key-password: ${{ secrets.DAY_KEY_PASS }}
-          play-json-key: ${{ secrets.DAY_PLAY_JSON_KEY }}
-          apple-cert-p12: ${{ secrets.DAY_APPLE_CERT_P12 }}
-          apple-cert-password: ${{ secrets.DAY_APPLE_CERT_PASSWORD }}
-          # A provisioning profile is issued per bundle id, so an app may name a secret of its
-          # own; the catalog's shared profile is the default.
-          apple-profile-b64: ${{ matrix.profile_secret != '' && secrets[matrix.profile_secret] || secrets.DAY_IOS_PROFILE_B64 }}
+          play-json-key: ${{ secrets.DAY_PLAY_JSON_KEY || secrets.GOOGLE_PLAY_APIKEY }}
+          apple-cert-p12: ${{ secrets.DAY_APPLE_CERT_P12 || secrets.APPLE_CERTIFICATES_P12 }}
+          apple-cert-password: ${{ secrets.DAY_APPLE_CERT_PASSWORD || secrets.APPLE_CERTIFICATES_P12_PASSWORD }}
+          # The name on the catalog's certificate. Apple has issued both "iPhone Distribution"
+          # and "Apple Distribution" certificates over the years, and codesign matches the name.
+          apple-identity: ${{ secrets.DAY_APPLE_IDENTITY || 'Apple Distribution' }}
+          # The app id a profile is issued for, and the team that issues it. With these, the
+          # profile is generated at signing time from the App Store Connect key, so the catalog
+          # stores none.
+          app-id: ${{ matrix.app_id }}
+          apple-team: ${{ secrets.DAY_APPLE_TEAM }}
+          # Empty for nearly every app: a profile is issued during the run. An app that needs a
+          # particular one names the secret holding it in its submission.
+          apple-profile-b64: ${{ matrix.profile_secret != '' && secrets[matrix.profile_secret] || '' }}
+          asc-api-key-b64: ${{ secrets.APPLE_APPSTORE_APIKEY }}
           asc-key-id: ${{ secrets.DAY_ASC_KEY_ID }}
           asc-issuer: ${{ secrets.DAY_ASC_ISSUER }}
           asc-key-b64: ${{ secrets.DAY_ASC_KEY_B64 }}

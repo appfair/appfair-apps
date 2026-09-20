@@ -67,7 +67,13 @@ flavor's `version` and `build` have to be raised before the tag is cut.
 The tag also has to carry a release with the packages the app's own CI built: an `.aab` for
 Android, an `.ipa` for iOS. The App Fair publishes the build it makes here, and that release is
 what it is compared against, so a tag with no packages attached leaves a submission with nothing
-to be checked against. An app built with the shared Day workflow already publishes them.
+to be checked against. These are the **base app's** packages: no second CI workflow and no
+published App Fair flavor packages are needed. The queue compares executable content and
+non-branding resources while normalizing the identities and launcher icons. It still checks the
+flavor's actual package id, version, permissions and provenance against its own manifest.
+The source tag may be `v2.0.1` while the store flavor is version `1.9.0`; the tag pins the source
+commit, and the flavor's version/build sequence belongs to its existing store listing.
+An app built with the shared Day workflow already publishes the base packages.
 
 ## The file
 
@@ -126,9 +132,9 @@ the run says so, and the submission is updated on purpose or taken up with the m
 asking a store to review it are two decisions. Setting it to `true` runs the lane that asks for
 review, or on Play promotes to production.
 
-`profile-secret` names the repository secret holding this app's App Store provisioning profile,
-for an app that needs one of its own. Apple issues a profile per bundle id, and the catalog's
-shared secret is the default.
+`profile-secret` names a repository secret holding an App Store provisioning profile, for the
+rare app that needs a particular one. Every other app needs nothing: the run asks Apple for a
+profile for the app it is publishing, against the certificate it is about to sign with.
 
 Adding a channel to the catalog is an entry in `policy.yaml`, a property in
 `schema/app.schema.json`, and an arm in `.github/actions/sign-submit`. The selftest checks that the

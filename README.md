@@ -69,16 +69,22 @@ complete.
   against what the app's `Day.toml` and its App Fair flavor say they should be.
 - Does it ask for more than it declared? Every permission in the package, against the app's
   declared permissions mapped through day's own catalogue, plus the baseline the framework adds.
-- Does it match the maintainer's release? The App Fair ships its own build; the maintainer's
-  release of the same tag should contain the same files. Differences outside the signature block
-  the submission, and a maintainer can waive one with the `allow-mismatch` label once the cause is
-  understood.
+- Does it match the maintainer's base release? The App Fair builds its own flavor; the app's
+  normal CI publishes the base app. Comparison normalizes each side's declared package id,
+  version/build, display name, URL scheme and package-qualified authorities/permissions. Day's
+  launcher icons, signing records and Android debug-symbol sidecars are excluded. Resource
+  tables and iOS asset catalogs are decoded, so other resources, permissions, components, native
+  binaries and DEX still have to match. `compare.json` lists all normalized/excluded paths.
+  Unexpected differences block publication unless a maintainer explicitly waives them. Missing
+  or ambiguous base assets, unreadable metadata, or an identity inconsistent with the manifest
+  always fail; a flavor package is never substituted for the base release.
 - Is it clean? Every file scanned with ClamAV, and the provenance and SBOM beside the package
   checked against the commit the tag actually points at, with a build from a dirty checkout
   refused.
 
-**Stage C** signs with `day sign apply`, which re-signs a package without rebuilding it, and
-uploads through the fastlane lanes `day store stage` writes from the app's listing.
+**Stage C** asks Apple for this app's App Store profile, signs with `day sign apply` — which
+re-signs a package without rebuilding it — and uploads through the fastlane lanes
+`day store stage` writes from the app's listing.
 
 ## What each side supplies
 
@@ -86,7 +92,10 @@ uploads through the fastlane lanes `day store stage` writes from the app's listi
 the canonical bundle id and a version that climbs past what the stores already have, a store
 listing (`store-appfair/`), and an app that meets the
 [inclusion criteria](https://appfair.org/docs/inclusion-criteria/). Their own CI publishes the
-release this queue compares against.
+base release this queue compares against. It needs no second workflow and no published flavor
+packages. The queue selects the base artifact name from the unflavored manifest at the pinned
+commit, including Day's unsigned IPA suffix. The source tag and the flavor's store version may
+follow different version sequences.
 
 **The App Fair** supplies the developer accounts, the signing material, the review, and this
 queue. Its secrets live in one job on one stage: a pull request opened from a fork reaches none of
@@ -118,7 +127,8 @@ Everything the workflows check is in one script, which needs Python and PyYAML:
 
 ```sh
 python3 scripts/queue.py validate --all         # every submission against policy.yaml
-python3 scripts/queue.py selftest               # the rules against their own cases
+python3 scripts/queue.py selftest
+python3 -m unittest discover -s scripts -p 'test_*.py'               # the rules against their own cases
 python3 scripts/queue.py wiring                 # every workflow against the actions it calls
 python3 scripts/queue.py plan --app Faire-Games # what the workflows would build
 python3 scripts/queue.py resolve --token Faire-Games --tag v2.0.0   # the tag and commit lines
@@ -126,12 +136,13 @@ python3 scripts/queue.py resolve --token Faire-Games --tag v2.0.0   # the tag an
 # The stages, by hand, against a package you already have.
 python3 scripts/queue.py inspect --package fair-games-android-mdc.aab \
   --sibling fair-games-android-mdc.apk --out report.json
-python3 scripts/queue.py compare --ours fair-games-android-mdc.aab --theirs release/fair-games-android-mdc.aab
+python3 scripts/queue.py compare --ours fair-games-android-mdc.aab --theirs release/day-games-android-mdc.aab \
+  --metadata metadata.json --reference-metadata base-metadata.json --target android-mdc
 python3 scripts/queue.py audit --app Faire-Games --report report.json \
   --metadata metadata.json --target android-mdc --sidecars . --expect-commit <sha>
 ```
 
-`metadata.json` is `day --flavor appfair metadata --json`, read from a checkout of the app's
+`base-metadata.json` is `day metadata --json`; `metadata.json` is `day --flavor appfair metadata --json`, read from a checkout of the app's
 manifest paths.
 
 ## Repository secrets
@@ -142,14 +153,28 @@ belongs to stops and the run says which it was.
 | secret | what it is |
 |---|---|
 | `DAY_APPLE_CERT_P12`, `DAY_APPLE_CERT_PASSWORD` | the iOS distribution certificate stage C signs with |
-| `DAY_IOS_PROFILE_B64` | the App Store provisioning profile; an app with one of its own names a different secret in its `apple-app-store.profile-secret` |
+| `DAY_APPLE_IDENTITY` | the name on that certificate, such as `iPhone Distribution: The App Fair Project Inc (25KG25YA3R)`. `codesign` matches it as a prefix, and Apple has issued both `iPhone Distribution` and `Apple Distribution` certificates |
+| `DAY_APPLE_TEAM` | the Apple Developer team id, for the profile the run issues |
 | `DAY_ASC_KEY_ID`, `DAY_ASC_ISSUER`, `DAY_ASC_KEY_B64` | the App Store Connect API key that uploads and manages listings |
 | `DAY_ANDROID_KEYSTORE_B64`, `DAY_ANDROID_KEY_ALIAS`, `DAY_KS_PASS`, `DAY_KEY_PASS` | the Play upload keystore |
 | `DAY_PLAY_JSON_KEY` | the Google Play service-account key `supply` uploads with |
 
-Apple issues a provisioning profile per bundle id, so the catalog keeps one profile secret per app
-unless a wildcard profile covers the namespace. One Play upload key serves every app, because Play
-App Signing lets a single upload key sign for many listings.
+Apple issues a provisioning profile per bundle id, and this catalog issues one during the run:
+before signing, `fastlane sigh` asks Apple for a profile for the app being published, against the
+certificate it is about to sign with. So there is no profile secret per app, nothing to renew
+between releases, and no wildcard profile over the namespace. An app that needs a particular
+profile names the secret holding it in its own `apple-app-store: profile-secret`.
+
+The Play upload key has to be the one registered for the existing listing. Replacing it with a new
+key for an app that is already published is what Play refuses.
+
+Some of the organization's keys are held as bundles, and the queue takes those too:
+`KEYSTORE_PROPERTIES` (base64 Java properties) carries the keystore's alias and both passwords,
+and `APPLE_APPSTORE_APIKEY` (base64 fastlane key file) carries the App Store Connect id, issuer
+and key. An explicit `DAY_*` secret wins over the bundle that duplicates it, so a catalog can move
+to the newer names one secret at a time. Decoding happens in the signing job alone: the files land
+under `RUNNER_TEMP` readable only by that job, and every value parsed out of a secret is masked
+before it is used.
 
 ## Setting the repository up
 

@@ -4,6 +4,7 @@
 /packages/
 /release/
 /metadata.json
+/base-metadata.json
 /report.json
 /compare.json
 __pycache__/

@@ -38,6 +38,17 @@ inputs:
     description: Which day CLI signs and stages.
     required: false
     default: main
+  # Two of the organization's existing secrets carry several of the fields below at once. An
+  # explicit field wins over the bundle that duplicates it, so a catalog can move to the newer
+  # names one secret at a time.
+  keystore-properties-b64:
+    description: Base64 Java properties holding keyAlias, storePassword and keyPassword.
+    required: false
+  asc-api-key-b64:
+    description: >-
+      Base64 fastlane App Store Connect key file, holding `key_id`, `issuer_id` and `key`. It
+      supplies the three App Store Connect fields at once.
+    required: false
   # --- the App Fair's own material ---------------------------------------------------------
   keystore-b64:
     description: Base64 Play upload keystore.
@@ -52,7 +63,7 @@ inputs:
     description: The key password.
     required: false
   play-json-key:
-    description: The Google Play service-account JSON.
+    description: The Google Play service-account JSON, plain or base64.
     required: false
   apple-cert-p12:
     description: Base64 iOS distribution certificate (.p12).
@@ -60,11 +71,23 @@ inputs:
   apple-cert-password:
     description: The password for that certificate.
     required: false
+  app-id:
+    description: The bundle id being published, which is what a profile is issued for.
+    required: false
+  apple-team:
+    description: The Apple Developer team id the App Store Connect key belongs to.
+    required: false
   apple-profile-b64:
-    description: Base64 App Store provisioning profile for this app.
+    description: >-
+      Base64 App Store provisioning profile, for an app that needs a particular one. Left empty,
+      the profile is generated from the App Store Connect key at signing time, so the catalog
+      keeps no profile per app and none of them can quietly expire.
     required: false
   apple-identity:
-    description: The signing identity to use, by name.
+    description: >-
+      The signing identity to sign with, by name or SHA-1. `codesign` matches a name as a prefix,
+      so "iPhone Distribution: …" and "Apple Distribution: …" are different identities and the
+      catalog's certificate decides which of them this is.
     required: false
     default: Apple Distribution
   asc-key-id:
@@ -83,6 +106,20 @@ runs:
     - uses: daybrite/actions/.github/actions/setup-day-cli@main
       with:
         version: ${{ inputs.day-version }}
+
+    - name: Normalize the signing inputs
+      shell: bash
+      env:
+        KEYSTORE_PROPERTIES_B64: ${{ inputs.keystore-properties-b64 }}
+        KEY_ALIAS: ${{ inputs.key-alias }}
+        STORE_PASS: ${{ inputs.keystore-password }}
+        KEY_PASS: ${{ inputs.key-password }}
+        PLAY_KEY: ${{ inputs.play-json-key }}
+        ASC_API_KEY_B64: ${{ inputs.asc-api-key-b64 }}
+        ASC_KEY_ID: ${{ inputs.asc-key-id }}
+        ASC_ISSUER: ${{ inputs.asc-issuer }}
+        ASC_KEY_B64: ${{ inputs.asc-key-b64 }}
+      run: python3 scripts/signing_inputs.py
 
     - name: Name the package
       id: pick
@@ -103,8 +140,6 @@ runs:
       shell: bash
       env:
         KEYSTORE_B64: ${{ inputs.keystore-b64 }}
-        DAY_SIGN_STORE_PASS: ${{ inputs.keystore-password }}
-        DAY_SIGN_KEY_PASS: ${{ inputs.key-password }}
       run: |
         set -euo pipefail
         [ -n "${KEYSTORE_B64:-}" ] || { echo "::error::no Play upload keystore in this repository's secrets"; exit 1; }
@@ -114,7 +149,7 @@ runs:
         # of this runner's variables are looked up.
         "$DAY_BIN" sign apply "${{ steps.pick.outputs.package }}" \
           --keystore "$RUNNER_TEMP/upload.keystore" \
-          --key-alias "${{ inputs.key-alias }}"
+          --key-alias "$APPFAIR_KEY_ALIAS"
 
     # --- Apple -----------------------------------------------------------------------------
     - name: Import the App Fair's distribution certificate
@@ -123,23 +158,75 @@ runs:
       env:
         CERT_P12: ${{ inputs.apple-cert-p12 }}
         CERT_PASSWORD: ${{ inputs.apple-cert-password }}
-        PROFILE_B64: ${{ inputs.apple-profile-b64 }}
       run: |
         set -euo pipefail
         [ -n "${CERT_P12:-}" ] || { echo "::error::no iOS distribution certificate in this repository's secrets"; exit 1; }
-        [ -n "${PROFILE_B64:-}" ] || { echo "::error::no provisioning profile for this app; store one and name it in apps/${{ inputs.token }}.yaml"; exit 1; }
         KEYCHAIN="$RUNNER_TEMP/appfair.keychain-db"
         PASSWORD="$(openssl rand -hex 24)"
         security create-keychain -p "$PASSWORD" "$KEYCHAIN"
         security set-keychain-settings -lut 3600 "$KEYCHAIN"
         security unlock-keychain -p "$PASSWORD" "$KEYCHAIN"
         echo "$CERT_P12" | base64 --decode > "$RUNNER_TEMP/dist.p12"
+        chmod 600 "$RUNNER_TEMP/dist.p12"
         security import "$RUNNER_TEMP/dist.p12" -k "$KEYCHAIN" -P "$CERT_PASSWORD" -T /usr/bin/codesign
         security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$PASSWORD" "$KEYCHAIN" >/dev/null
         security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
         rm -f "$RUNNER_TEMP/dist.p12"
-        echo "$PROFILE_B64" | base64 --decode > "$RUNNER_TEMP/appstore.mobileprovision"
         security find-identity -v -p codesigning "$KEYCHAIN"
+        # Name the identity the certificate actually carries, so a mismatch reads here rather
+        # than as codesign's "no identity found" half a minute later.
+        security find-identity -v -p codesigning "$KEYCHAIN" | grep -q "${{ inputs.apple-identity }}" || {
+          echo "::error::the imported certificate is not \"${{ inputs.apple-identity }}\" — set DAY_APPLE_IDENTITY to the name above"
+          exit 1
+        }
+
+    - name: The App Store profile for ${{ inputs.app-id }}
+      if: inputs.target == 'ios-uikit'
+      shell: bash
+      env:
+        PROFILE_B64: ${{ inputs.apple-profile-b64 }}
+        ASC_KEY_ID: ${{ env.APPFAIR_ASC_KEY_ID }}
+        ASC_ISSUER: ${{ env.APPFAIR_ASC_ISSUER }}
+        ASC_KEY_PATH: ${{ env.APPFAIR_ASC_KEY_PATH }}
+        APPLE_TEAM: ${{ inputs.apple-team }}
+        APP_ID: ${{ inputs.app-id }}
+      run: |
+        set -euo pipefail
+        DEST="$RUNNER_TEMP/appstore.mobileprovision"
+
+        # A stored profile wins, for an app that needs a particular one.
+        if [ -n "${PROFILE_B64:-}" ]; then
+          echo "$PROFILE_B64" | base64 --decode > "$DEST"
+          echo "using the stored profile"
+        else
+          # Otherwise Apple issues one now, for this app id, against the certificate imported
+          # above. A catalog that generates its profiles keeps none: nothing to store per app,
+          # nothing to renew, and nothing to expire between two releases.
+          [ -n "${ASC_KEY_ID:-}" ] && [ -n "${ASC_ISSUER:-}" ] && [ -s "${ASC_KEY_PATH:-}" ] || {
+            echo "::error::no App Store Connect key, so no profile can be issued for $APP_ID"
+            exit 1
+          }
+          [ -n "${APP_ID:-}" ] || { echo "::error::no app id to issue a profile for"; exit 1; }
+          # fastlane's own API-key file: the three secrets, written where only this job can read
+          # them, never on a command line.
+          python3 -c 'import json, os, pathlib; print(json.dumps({"key_id": os.environ["ASC_KEY_ID"], "issuer_id": os.environ["ASC_ISSUER"], "key": pathlib.Path(os.environ["ASC_KEY_PATH"]).read_text(), "in_house": False}))' > "$RUNNER_TEMP/asc-key.json"
+          chmod 600 "$RUNNER_TEMP/asc-key.json"
+          command -v fastlane >/dev/null || sudo gem install fastlane --no-document
+          # `--force` regenerates rather than reusing whatever is on the account, so the profile
+          # always carries the certificate this run is about to sign with.
+          fastlane sigh \
+            --api_key_path "$RUNNER_TEMP/asc-key.json" \
+            --app_identifier "$APP_ID" \
+            ${APPLE_TEAM:+--team_id "$APPLE_TEAM"} \
+            --platform ios \
+            --force \
+            --output_path "$RUNNER_TEMP/profiles" \
+            --filename appstore.mobileprovision
+          mv "$RUNNER_TEMP/profiles/appstore.mobileprovision" "$DEST"
+          rm -f "$RUNNER_TEMP/asc-key.json"
+        fi
+        # What it turned out to be, so a signing failure later can be read against it.
+        security cms -D -i "$DEST" | plutil -p - | grep -E '"(Name|UUID|TeamIdentifier|ExpirationDate)"' || true
 
     - name: Sign the .ipa with the App Fair's identity
       if: inputs.target == 'ios-uikit'
@@ -191,24 +278,16 @@ runs:
       env:
         DAY_AAB: ${{ inputs.target == 'android-mdc' && steps.pick.outputs.package || '' }}
         DAY_IPA: ${{ inputs.target == 'ios-uikit' && steps.pick.outputs.package || '' }}
-        DAY_ASC_KEY_ID: ${{ inputs.asc-key-id }}
-        DAY_ASC_ISSUER: ${{ inputs.asc-issuer }}
-        ASC_KEY_B64: ${{ inputs.asc-key-b64 }}
-        PLAY_JSON_KEY: ${{ inputs.play-json-key }}
+        DAY_ASC_KEY_ID: ${{ env.APPFAIR_ASC_KEY_ID }}
+        DAY_ASC_ISSUER: ${{ env.APPFAIR_ASC_ISSUER }}
+        DAY_ASC_KEY: ${{ env.APPFAIR_ASC_KEY_PATH }}
+        SUPPLY_JSON_KEY: ${{ env.APPFAIR_PLAY_KEY_PATH }}
       run: |
         set -euo pipefail
         case "${{ inputs.channel }}" in
           apple-app-store|google-play-store) ;;
           *) echo "::error::${{ inputs.channel }} has no arm here yet — policy.yaml declares it, and this action has to learn it"; exit 1 ;;
         esac
-        if [ -n "${ASC_KEY_B64:-}" ]; then
-          echo "$ASC_KEY_B64" | base64 --decode > "$RUNNER_TEMP/asc.p8"
-          export DAY_ASC_KEY="$RUNNER_TEMP/asc.p8"
-        fi
-        if [ -n "${PLAY_JSON_KEY:-}" ]; then
-          printf '%s' "$PLAY_JSON_KEY" > "$RUNNER_TEMP/play.json"
-          export SUPPLY_JSON_KEY="$RUNNER_TEMP/play.json"
-        fi
         read -ra lane <<< "${{ inputs.lane }}"   # "android upload" is two fastlane arguments
         command -v fastlane >/dev/null || sudo gem install fastlane --no-document
         fastlane "${lane[@]}"

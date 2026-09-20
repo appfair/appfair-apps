@@ -82,6 +82,7 @@ runs:
         # `day metadata` reads Day.toml, the flavor manifest and Cargo.toml. It builds nothing and
         # runs nothing from the app.
         (cd app-data && "$DAY_BIN" --flavor "${{ inputs.flavor }}" metadata --json) > metadata.json
+        (cd app-data && "$DAY_BIN" metadata --json) > base-metadata.json
         python3 -c "import json;d=json.load(open('metadata.json'));p=d['project'];print('manifest:',p['id'],p['version'],p['build'])"
 
     - name: Name the packages
@@ -130,17 +131,13 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        theirs=$(ls release/*.${{ steps.pick.outputs.ext }} 2>/dev/null | head -1 || true)
-        if [ -z "$theirs" ]; then
-          if [ "${{ inputs.allow-mismatch }}" = "true" ]; then
-            echo "::warning::the release carries no .${{ steps.pick.outputs.ext }}; the comparison was waived by label"
-            exit 0
-          fi
-          echo "::error file=apps/${{ inputs.token }}.yaml::${{ inputs.repo }} ${{ inputs.tag }} publishes no .${{ steps.pick.outputs.ext }}, so this build has nothing to be checked against"
-          exit 1
-        fi
+        # Select the base identity at the submitted commit, never whichever archive sorts first.
+        theirs=$(python3 scripts/queue.py select-release --directory release \
+          --metadata base-metadata.json --target "${{ inputs.target }}")
         python3 scripts/queue.py compare \
           --ours "${{ steps.pick.outputs.primary }}" --theirs "$theirs" --out compare.json \
+          --metadata metadata.json --reference-metadata base-metadata.json \
+          --target "${{ inputs.target }}" \
           ${{ inputs.allow-mismatch == 'true' && '--allow-mismatch' || '' }}
 
     - name: Hold it against the submission and the manifest
@@ -166,13 +163,20 @@ runs:
           echo "virus scanning is off in policy.yaml"
           exit 0
         fi
-        sudo apt-get update -qq
-        sudo apt-get install -y -qq clamav >/dev/null
-        sudo systemctl stop clamav-freshclam 2>/dev/null || true
-        sudo freshclam --quiet
+        if [ "$(uname -s)" = Darwin ]; then
+          brew list clamav >/dev/null 2>&1 || brew install clamav
+        else
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clamav >/dev/null
+          sudo systemctl stop clamav-freshclam 2>/dev/null || true
+        fi
+        mkdir -p "$RUNNER_TEMP/clamav"
+        printf 'DatabaseDirectory %s\nDatabaseMirror database.clamav.net\n' \
+          "$RUNNER_TEMP/clamav" > "$RUNNER_TEMP/freshclam.conf"
+        freshclam --quiet --config-file="$RUNNER_TEMP/freshclam.conf"
         # clamscan reads archives itself, so the packages are scanned where they lie and nothing
         # is unpacked into a place anything might run it from.
-        clamscan --recursive --infected --max-filesize=4000M --max-scansize=4000M "${{ inputs.packages }}"
+        clamscan --database="$RUNNER_TEMP/clamav" --recursive --infected --max-filesize=4000M --max-scansize=4000M "${{ inputs.packages }}"
 
     - name: Keep the reports
       uses: actions/upload-artifact@v7
@@ -182,4 +186,5 @@ runs:
           report.json
           compare.json
           metadata.json
+          base-metadata.json
         if-no-files-found: warn
