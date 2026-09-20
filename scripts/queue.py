@@ -40,7 +40,7 @@ STATE = ROOT / "state" / "published.json"
 # The keys a submission may carry. Anything else is a typo, and a typo that parsed would be a rule
 # nobody applied. A channel's own settings live under its name, and policy.yaml says which
 # channels exist and which settings each of them takes.
-TOP_LEVEL = {"token", "title", "repo", "tag", "flavor", "distribution", "summary"}
+TOP_LEVEL = {"token", "title", "tag", "commit", "distribution", "summary"}
 
 
 def load_yaml(path: Path) -> dict:
@@ -57,6 +57,19 @@ def load_yaml(path: Path) -> dict:
 # --------------------------------------------------------------------------------------------
 # Policy and submissions
 # --------------------------------------------------------------------------------------------
+
+
+def default_flavor() -> str:
+    """The Day build flavor every submission is built with: this catalog's own name.
+
+    `appfair-apps` builds each app's `appfair` flavor, and a fork called `gamesfair-apps` builds
+    its `gamesfair` one, with nothing to edit. The identity an app is published under belongs to
+    whoever publishes it, so the name of the queue is the right place for it to come from — and a
+    submission cannot choose it.
+    """
+    repository = os.environ.get("GITHUB_REPOSITORY", "")
+    name = repository.split("/")[-1] if repository else ROOT.name
+    return name.removesuffix("-apps") or name
 
 
 @dataclass
@@ -82,7 +95,9 @@ class Policy:
     id_namespace: str
     token_pattern: str
     tag_pattern: str
+    commit_pattern: str
     channels: dict[str, Channel]
+    flavor: str
     day_version: str
     default_ios_profile_secret: str
 
@@ -104,7 +119,9 @@ class Policy:
             id_namespace=raw["id-namespace"],
             token_pattern=raw["token-pattern"],
             tag_pattern=raw["tag-pattern"],
+            commit_pattern=raw["commit-pattern"],
             channels=channels,
+            flavor=str(raw.get("flavor") or default_flavor()),
             day_version=str(raw.get("day-version", "main")),
             default_ios_profile_secret=raw.get(
                 "default-ios-profile-secret", "DAY_IOS_PROFILE_B64"
@@ -149,9 +166,17 @@ class App:
 
     @property
     def owner_repo(self) -> str:
-        """`owner/name`, the shape every GitHub action wants, out of the repository URL."""
-        url = str(self.data.get("repo", "")).removesuffix(".git").rstrip("/")
-        return "/".join(url.split("/")[-2:])
+        """`owner/name`, the shape every GitHub action wants.
+
+        An App Fair app lives at `<token>/<token>`: the token is the name of its organization and
+        of the repository inside it (https://appfair.org/docs/inclusion-criteria/#naming), so the
+        submission says it once and nothing can disagree with it.
+        """
+        return f"{self.token}/{self.token}"
+
+    @property
+    def repo_url(self) -> str:
+        return f"https://github.com/{self.owner_repo}"
 
 
 def relative(path: Path) -> str:
@@ -218,25 +243,25 @@ def validate_app(app: App, policy: Policy, others: list[App] | None = None) -> l
     elif len(title) > 30:
         bad(f"title is {len(title)} characters; the App Store takes 30")
 
-    repo = data.get("repo")
-    if not isinstance(repo, str) or not re.match(
-        r"^https://github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/?$", repo.removesuffix(".git")
-    ):
-        bad("repo must be a GitHub repository URL, https://github.com/<owner>/<name>")
-    elif token and repo.removesuffix(".git").rstrip("/").split("/")[-1] != token:
-        bad(f"repo has to end in the token {token!r}; an app's repository is its token")
-
     tag = data.get("tag")
     if not isinstance(tag, str) or not tag:
         bad("tag is required: the released tag of the app to build")
     elif not re.match(policy.tag_pattern, tag):
         bad(f"tag {tag!r} does not match {policy.tag_pattern}; submit a released version")
 
-    flavor = data.get("flavor", "")
-    if not isinstance(flavor, str):
-        bad("flavor must be a string: the Day build flavor carrying the App Fair identity")
-    elif flavor and not re.match(r"^[A-Za-z0-9_-]+$", flavor):
-        bad(f"flavor {flavor!r} is not a flavor name")
+    # The commit that tag points at. Every stage checks this out, so what is reviewed and what is
+    # published are one thing even if the tag is moved afterwards.
+    commit = data.get("commit")
+    if not isinstance(commit, str) or not commit:
+        bad(
+            "commit is required: the full 40-character commit the tag points at "
+            "(`git rev-parse <tag>^{commit}`, or scripts/queue.py resolve)"
+        )
+    elif not re.match(policy.commit_pattern, commit):
+        bad(
+            f"commit {commit!r} does not match {policy.commit_pattern}; it takes the full "
+            f"40-character sha in lower case"
+        )
 
     # Where the app goes, and what builds for it. The channels sit under the target whose package
     # they take, so the pairing is in the file: a channel under the wrong target is an error the
@@ -376,7 +401,6 @@ def app_channels(app: App, policy: Policy) -> list[tuple[str, Channel]]:
 
 def matrix_entry(app: App, policy: Policy) -> dict:
     """One row per app: what every stage needs to know about the submission itself."""
-    flavor = str(app.data.get("flavor", ""))
     pairs = app_channels(app, policy)
     return {
         "token": app.token,
@@ -384,10 +408,12 @@ def matrix_entry(app: App, policy: Policy) -> dict:
         "app_id": f"{policy.id_namespace}{app.token}",
         "repo": app.owner_repo,
         "tag": app.data.get("tag", ""),
-        "flavor": flavor,
-        # The catalog builds the flavor. The app's own build belongs to its repository, and
-        # building it here would double every submission.
-        "flavors_only": bool(flavor),
+        "commit": app.data.get("commit", ""),
+        # Every app is built as this catalog's flavor, whose manifest carries the identity it is
+        # published under. The app's own build belongs to its repository, and building it here
+        # would double every submission.
+        "flavor": policy.flavor,
+        "flavors_only": True,
         "targets": ",".join(sorted({target for target, _ in pairs})),
         "channels": ",".join(channel.name for _, channel in pairs),
         "day_version": policy.day_version,
@@ -531,6 +557,18 @@ def cmd_verify(args: argparse.Namespace) -> int:
             f"https://appfair.org/docs/building/#bundle-id"
         )
 
+    # The tag still points at the commit this submission was written against. A tag can be moved,
+    # and a submission reviewed at one commit and published from another would be a review of
+    # nothing. The stages check the commit out, so a moved tag changes no bytes; this says so out
+    # loud, because a moved tag usually means the maintainer meant to submit something else.
+    submitted = str(app.data.get("commit", ""))
+    if args.tag_commit and submitted and args.tag_commit != submitted:
+        bad(
+            f"the tag now points at {args.tag_commit[:12]}, and this submission names "
+            f"{submitted[:12]}. The build follows the commit; update `commit` when the tag was "
+            f"moved on purpose, and ask the maintainer when it was not"
+        )
+
     # The tag names the version: `v1.9.0` builds 1.9.0. Stores order releases by that number, so a
     # tag disagreeing with the manifest is a submission of something other than what it says.
     tag = str(app.data.get("tag", ""))
@@ -546,10 +584,10 @@ def cmd_verify(args: argparse.Namespace) -> int:
             )
 
     flavor = metadata.get("flavor") or ""
-    if str(app.data.get("flavor", "")) != flavor:
+    if flavor != policy.flavor:
         bad(
-            f"this submission names flavor {app.data.get('flavor', '')!r} while the metadata was "
-            f"read with {flavor!r}; the workflow and the file disagree"
+            f"the metadata was read with flavor {flavor!r}, and this catalog builds "
+            f"{policy.flavor!r}; the workflow and policy.yaml disagree"
         )
 
     for problem in problems:
@@ -558,6 +596,34 @@ def cmd_verify(args: argparse.Namespace) -> int:
         return 1
     print(f"verified {app.token}: {resolved_id} {version} ({project.get('build')}) from {tag}")
     return 0
+
+
+# --------------------------------------------------------------------------------------------
+# resolve — the two lines a submission pins itself with
+# --------------------------------------------------------------------------------------------
+
+
+def cmd_resolve(args: argparse.Namespace) -> int:
+    """Print the `tag` and `commit` lines for an app and tag.
+
+    Every submission pins a commit, and this is where the value comes from, so nobody has to know
+    that an annotated tag has to be peeled before its commit appears.
+    """
+    repo = (args.repo or f"https://github.com/{args.token}/{args.token}").removesuffix(".git").rstrip("/")
+    for ref in (f"refs/tags/{args.tag}^{{}}", f"refs/tags/{args.tag}"):
+        out = subprocess.run(
+            ["git", "ls-remote", repo, ref], capture_output=True, text=True
+        )
+        sha = out.stdout.split("\t")[0].strip() if out.stdout.strip() else ""
+        if sha:
+            print(f"tag: {args.tag}")
+            print(f"commit: {sha}")
+            return 0
+        if out.returncode != 0 and out.stderr.strip():
+            Problem(repo, out.stderr.strip().splitlines()[-1]).emit()
+            return 1
+    Problem(repo, f"no tag {args.tag!r}; tag the release before submitting it").emit()
+    return 1
 
 
 # --------------------------------------------------------------------------------------------
@@ -658,7 +724,7 @@ def cmd_record(args: argparse.Namespace) -> int:
     state.setdefault("apps", {})[app.token] = {
         "title": app.data.get("title", app.token),
         "id": f"{policy.id_namespace}{app.token}",
-        "repo": app.data.get("repo", ""),
+        "repo": app.repo_url,
         "tag": args.tag or app.data.get("tag", ""),
         "channels": sorted(c for c in (args.channels or "").split(",") if c),
         "published": now,
@@ -1069,8 +1135,8 @@ def cmd_audit(args: argparse.Namespace) -> int:
             if props.get("day:dirty") == "true":
                 bad("the build came from a checkout with uncommitted changes")
             repo = props.get("day:repository", "")
-            if repo and app.data.get("repo") and repo.rstrip("/") != str(app.data["repo"]).rstrip("/"):
-                bad(f"the build records repository {repo}, and this submission names {app.data['repo']}")
+            if repo and repo.rstrip("/") != app.repo_url:
+                bad(f"the build records repository {repo}, and this app lives at {app.repo_url}")
             if props.get("day:app-id") and props["day:app-id"] != project.get("id", ""):
                 bad(
                     f"the build records app id {props['day:app-id']}, and the manifest builds "
@@ -1182,9 +1248,8 @@ def cmd_wiring(args: argparse.Namespace) -> int:
 GOOD = """
 token: Faire-Games
 title: Fair Games
-repo: https://github.com/Faire-Games/Faire-Games
 tag: v1.9.0
-flavor: appfair
+commit: 026ae1d62a8c49b1b0793aed8b5a2a0064ba95b6
 distribution:
   ios-uikit:
     - apple-app-store
@@ -1197,9 +1262,19 @@ CASES: list[tuple[str, str, str]] = [
     ("a token that is not the file name", "token: Faire-Games|token: Fair-Games", "have to agree"),
     ("a branch where a tag belongs", "tag: v1.9.0|tag: main", "submit a released version"),
     (
-        "a repository somewhere else",
-        "repo: https://github.com/Faire-Games/Faire-Games|repo: https://gitlab.com/x/Faire-Games",
-        "GitHub repository URL",
+        "a tag with no commit pinned to it",
+        "commit: 026ae1d62a8c49b1b0793aed8b5a2a0064ba95b6\n|",
+        "commit is required",
+    ),
+    (
+        "a short commit",
+        "commit: 026ae1d62a8c49b1b0793aed8b5a2a0064ba95b6|commit: 026ae1d",
+        "full 40-character sha",
+    ),
+    (
+        "a commit in capitals",
+        "commit: 026ae1d62a8c49b1b0793aed8b5a2a0064ba95b6|commit: 026AE1D62A8C49B1B0793AED8B5A2A0064BA95B6",
+        "lower case",
     ),
     (
         "a target nothing takes a package from",
@@ -1227,7 +1302,12 @@ CASES: list[tuple[str, str, str]] = [
         "must list at least one channel",
     ),
     ("nowhere to publish", "distribution:|distributions:", "distribution is required"),
-    ("a key nobody reads", "flavor: appfair|flavour: appfair", "unknown key"),
+    ("a key nobody reads", "title: Fair Games|titel: Fair Games", "unknown key"),
+    (
+        "a submission choosing its own flavor",
+        "title: Fair Games|title: Fair Games\nflavor: something-else",
+        "unknown key",
+    ),
     (
         "a title longer than the store takes",
         "title: Fair Games|title: Fair Games And Other Diversions Vol 2",
@@ -1235,17 +1315,17 @@ CASES: list[tuple[str, str, str]] = [
     ),
     (
         "a setting a channel does not take",
-        "flavor: appfair|flavor: appfair\ngoogle-play-store:\n  profile-secret: SOME_SECRET",
+        "title: Fair Games|title: Fair Games\ngoogle-play-store:\n  profile-secret: SOME_SECRET",
         "unknown setting",
     ),
     (
         "a secret's value where its name belongs",
-        "flavor: appfair|flavor: appfair\napple-app-store:\n  profile-secret: MIIKmAIBAz",
+        "title: Fair Games|title: Fair Games\napple-app-store:\n  profile-secret: MIIKmAIBAz",
         "NAME of a repository secret",
     ),
     (
         "settings for a channel this app does not use",
-        "flavor: appfair|flavor: appfair\naltstore:\n  submit: true",
+        "title: Fair Games|title: Fair Games\naltstore:\n  submit: true",
         "distribution does not send this app there",
     ),
 ]
@@ -1314,6 +1394,14 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
     else:
         print("ok   the schema takes the targets the channels name")
 
+    # The flavor follows this catalog's name, so a fork builds its own without editing anything.
+    expected = ROOT.name.removesuffix("-apps")
+    if policy.flavor == expected:
+        print(f"ok   the flavor follows this catalog's name ({policy.flavor})")
+    else:
+        failures += 1
+        print(f"FAIL the flavor is {policy.flavor!r} and this catalog is {ROOT.name!r}")
+
     # The real catalog passes its own rules, every time this runs.
     everything = catalog()
     for app in everything:
@@ -1360,7 +1448,14 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("verify", help="check a submission against the app it points at")
     p.add_argument("--app", required=True, help="the app token")
     p.add_argument("--metadata", required=True, help="`day metadata --json` output")
+    p.add_argument("--tag-commit", help="what the tag points at now, for the pin check")
     p.set_defaults(func=cmd_verify)
+
+    p = sub.add_parser("resolve", help="print the tag and commit lines for an app and tag")
+    p.add_argument("--token", help="the app token, whose repository is <token>/<token>")
+    p.add_argument("--repo", help="a repository URL, for an app that is not in the catalog yet")
+    p.add_argument("--tag", required=True, help="the released tag")
+    p.set_defaults(func=cmd_resolve)
 
     p = sub.add_parser("authorize", help="warn when a change comes from outside an app's maintainers")
     p.add_argument("apps", nargs="+", help="app tokens the change touches")

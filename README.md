@@ -12,15 +12,19 @@ repository is the queue in front of the stores.
 # apps/Faire-Games.yaml
 token: Faire-Games
 title: Fair Games
-repo: https://github.com/Faire-Games/Faire-Games
-tag: v1.9.0
-flavor: appfair
+tag: v2.0.0
+commit: 8b03beeedf19b241954b31678ac8e3fbc816dcc7
 distribution:
   ios-uikit:
     - apple-app-store
   android-mdc:
     - google-play-store
 ```
+
+The token is also the address: an App Fair app lives at `https://github.com/<token>/<token>`. The
+commit is what every stage checks out, so a tag moved after review changes nothing that gets
+built, signed or published — `scripts/queue.py resolve --token Faire-Games --tag v2.0.0` prints
+both lines.
 
 `distribution` is where the app goes, under the target that builds for it: one build per target,
 one submission per channel, and room for the channels the catalog is headed for (AltStore,
@@ -92,7 +96,9 @@ The identity an app is published under belongs to the App Fair: `org.appfair.app
 `org.appfair.app.<token with hyphens as underscores>` on Google Play
 ([why](https://appfair.org/docs/building/#bundle-id)). An app carries that identity in a
 [Day build flavor](https://daybrite.dev/docs/flavors) — a `Day-appfair.toml` beside its `Day.toml`
-— which keeps the maintainer's own builds under the maintainer's own id.
+— which keeps the maintainer's own builds under the maintainer's own id. The flavor is named for
+this catalog rather than chosen per submission, so a fork called `gamesfair-apps` builds each
+app's `gamesfair` flavor with nothing to edit.
 
 ## Submitting
 
@@ -102,7 +108,7 @@ checks apply. In short:
 1. Open a [discussion](https://github.com/orgs/appfair/discussions) proposing the app, if it is
    new to the catalog.
 2. Tag a release of the app, with its App Fair flavor's version and build number raised.
-3. Add or edit `apps/<token>.yaml` in a pull request.
+3. Add or edit `apps/<token>.yaml` in a pull request, pinning the tag and its commit.
 4. Watch the checks. They are the same ones that run on merge, so a green pull request is a
    submission that will publish.
 
@@ -115,6 +121,7 @@ python3 scripts/queue.py validate --all         # every submission against polic
 python3 scripts/queue.py selftest               # the rules against their own cases
 python3 scripts/queue.py wiring                 # every workflow against the actions it calls
 python3 scripts/queue.py plan --app Faire-Games # what the workflows would build
+python3 scripts/queue.py resolve --token Faire-Games --tag v2.0.0   # the tag and commit lines
 
 # The stages, by hand, against a package you already have.
 python3 scripts/queue.py inspect --package fair-games-android-mdc.aab \

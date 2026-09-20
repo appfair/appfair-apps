@@ -69,6 +69,16 @@ jobs:
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v7
+      - name: Where does ${{ matrix.tag }} point now?
+        run: |
+          set -euo pipefail
+          # A tag can be moved between the review and the merge, and this is the run that would
+          # publish what it moved to. The build follows the commit either way; the check below
+          # says so rather than letting it pass unnoticed.
+          PEELED=$(git ls-remote --tags "https://github.com/${{ matrix.repo }}" "refs/tags/${{ matrix.tag }}^{}" | cut -f1)
+          PLAIN=$(git ls-remote --tags "https://github.com/${{ matrix.repo }}" "refs/tags/${{ matrix.tag }}" | cut -f1)
+          echo "TAG_COMMIT=${PEELED:-$PLAIN}" >> "$GITHUB_ENV"
+          echo "${{ matrix.tag }} → ${PEELED:-$PLAIN}"
       - name: Read the app's manifest paths from policy.yaml
         id: paths
         run: |
@@ -79,11 +89,11 @@ jobs:
           print("\n".join(yaml.safe_load(open("policy.yaml"))["app-data-paths"]))
           print("EOF")
           PY
-      - name: Check out the app's manifest at ${{ matrix.tag }}
+      - name: Check out the app's manifest at ${{ matrix.commit }}
         uses: actions/checkout@v7
         with:
           repository: ${{ matrix.repo }}
-          ref: ${{ matrix.tag }}
+          ref: ${{ matrix.commit }}
           path: app-data
           sparse-checkout: ${{ steps.paths.outputs.sparse }}
           sparse-checkout-cone-mode: false
@@ -102,7 +112,8 @@ jobs:
           fi
       - name: Check it against the submission
         run: |
-          python3 scripts/queue.py verify --app "${{ matrix.token }}" --metadata metadata.json
+          python3 scripts/queue.py verify --app "${{ matrix.token }}" --metadata metadata.json \
+            --tag-commit "${TAG_COMMIT:-}"
 
   # Stage A: the app's own build, on a runner with no credentials on it.
   build:
@@ -121,7 +132,7 @@ jobs:
       - uses: ./.github/actions/build-app
         with:
           repo: ${{ matrix.repo }}
-          ref: ${{ matrix.tag }}
+          ref: ${{ matrix.commit }}
           target: ${{ matrix.target }}
           flavor: ${{ matrix.flavor }}
           day-version: ${{ matrix.day_version }}
@@ -152,7 +163,8 @@ jobs:
         with:
           token: ${{ matrix.token }}
           repo: ${{ matrix.repo }}
-          ref: ${{ matrix.tag }}
+          ref: ${{ matrix.commit }}
+          tag: ${{ matrix.tag }}
           target: ${{ matrix.target }}
           flavor: ${{ matrix.flavor }}
           day-version: ${{ matrix.day_version }}
@@ -186,7 +198,7 @@ jobs:
         with:
           token: ${{ matrix.token }}
           repo: ${{ matrix.repo }}
-          ref: ${{ matrix.tag }}
+          ref: ${{ matrix.commit }}
           target: ${{ matrix.target }}
           channel: ${{ matrix.channel }}
           flavor: ${{ matrix.flavor }}

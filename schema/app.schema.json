@@ -7,8 +7,8 @@
   "required": [
     "token",
     "title",
-    "repo",
     "tag",
+    "commit",
     "distribution"
   ],
   "additionalProperties": false,
@@ -16,7 +16,7 @@
     "token": {
       "type": "string",
       "pattern": "^[A-Za-z][A-Za-z0-9-]{1,38}$",
-      "description": "The app token: the name of its GitHub organization and repository, the file name here, and the last segment of its bundle id (org.appfair.app.<token>). It holds for the life of the app.",
+      "description": "The app token: the name of its GitHub organization and repository (the app lives at https://github.com/<token>/<token>), the file name here, and the last segment of its bundle id (org.appfair.app.<token>). It holds for the life of the app.",
       "examples": [
         "Faire-Games"
       ]
@@ -30,14 +30,6 @@
         "Fair Games"
       ]
     },
-    "repo": {
-      "type": "string",
-      "pattern": "^https://github\\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/?$",
-      "description": "The app's public GitHub repository, whose name is the token.",
-      "examples": [
-        "https://github.com/Faire-Games/Faire-Games"
-      ]
-    },
     "tag": {
       "type": "string",
       "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+([.-][0-9A-Za-z.-]+)?$",
@@ -46,12 +38,12 @@
         "v1.9.0"
       ]
     },
-    "flavor": {
+    "commit": {
       "type": "string",
-      "pattern": "^[A-Za-z0-9_-]+$",
-      "description": "The Day build flavor carrying the App Fair identity — Day-<flavor>.toml in the app's repository, stating the canonical bundle id, the display name and the version that continues the app's store history. Left out for an app whose Day.toml already builds under org.appfair.app.<token>.",
+      "pattern": "^[0-9a-f]{40}$",
+      "description": "The commit that tag points at, in full and in lower case. Every stage checks this out, so a submission reviewed at one commit cannot be published from another when the tag is moved. `scripts/queue.py resolve` prints it.",
       "examples": [
-        "appfair"
+        "8b03beeedf19b241954b31678ac8e3fbc816dcc7"
       ]
     },
     "summary": {

@@ -9,7 +9,9 @@ inputs:
     description: The app's repository, as owner/name.
     required: true
   ref:
-    description: The tag to build.
+    description: >-
+      The commit to build. A submission pins one, so what a reviewer read and what gets built are
+      the same bytes even when the tag is moved afterwards.
     required: true
   target:
     description: The Day target to build, such as ios-uikit or android-mdc.

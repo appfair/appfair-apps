@@ -17,7 +17,12 @@ The App Fair publishes every app under its own identity: `org.appfair.app.<token
 token is the app's GitHub organization and repository name. The maintainer's own builds keep the
 maintainer's identity, and the App Fair build takes the catalog's. In a Day project that
 separation is a [build flavor](https://daybrite.dev/docs/flavors) — a `Day-appfair.toml` beside
-`Day.toml`:
+`Day.toml`.
+
+Every app in this catalog carries one, and it is named for the catalog: `appfair-apps` builds
+each app's `appfair` flavor. A submission does not choose it, which is what keeps one identity
+behind everything this queue publishes. (A fork of this catalog called `gamesfair-apps` would
+build each app's `gamesfair` flavor, with nothing to edit.)
 
 ```toml
 # Day-appfair.toml, in the app's repository
@@ -69,9 +74,8 @@ to be checked against. An app built with the shared Day workflow already publish
 ```yaml
 token: Faire-Games                                 # required
 title: Fair Games                                  # required
-repo: https://github.com/Faire-Games/Faire-Games   # required
-tag: v1.9.0                                        # required
-flavor: appfair                                    # optional
+tag: v2.0.0                                        # required
+commit: 8b03beeedf19b241954b31678ac8e3fbc816dcc7   # required
 summary: Classic puzzle and arcade games, offline. # optional
 
 distribution:                                      # required
@@ -85,16 +89,28 @@ apple-app-store:                                   # optional, per channel
   submit: false
 ```
 
+`scripts/queue.py resolve --token Faire-Games --tag v2.0.0` prints the `tag` and `commit` lines.
+
 | key | what it is |
 |---|---|
-| `token` | The app's GitHub organization and repository name, the name of this file, and the last segment of its bundle id. It holds for the life of the app. |
+| `token` | The app's GitHub organization and repository name, the name of this file, and the last segment of its bundle id. The app lives at `https://github.com/<token>/<token>`, so nothing else names the repository. It holds for the life of the app. |
 | `title` | The name on the home screen and in the store, up to 30 characters. Unique in this catalog, and distinct from well-known apps elsewhere. |
-| `repo` | The app's public GitHub repository. The queue's runners carry this repository's token alone, so the source has to be readable without one of its own. |
-| `tag` | The released tag to build, `vX.Y.Z`. What is published has to be what the maintainer released, and it has to still be there later. |
-| `flavor` | The Day flavor carrying the App Fair identity. Leave it out when the app's `Day.toml` already builds under `org.appfair.app.<token>`. |
+| `tag` | The released tag to build, `vX.Y.Z`. It is where the release assets hang, and what a human reads. |
+| `commit` | What that tag points at, in full and in lower case. Every stage checks this out. |
+| — | The build flavor is the catalog's, not the submission's: this queue builds each app's `appfair` flavor, and a fork of it would build its own. |
 | `summary` | One line for people reading the catalog. The store listing is the app's own. |
 | `distribution` | Where the app goes, under the target that builds for it. Each target is built once, and each channel under it is a submission. |
 | `<channel>` | Settings for one channel, under its own name, for a channel `distribution` sends this app to. |
+
+### Why a commit and a tag
+
+A tag can be moved. A submission reviewed at one commit and published from another would be a
+review of nothing, so the commit is what every stage checks out: the build, the validation, and
+the signing all read the same bytes a reviewer read, whatever the tag says by then.
+
+The tag is still here, because it is where the release assets hang and what people call the
+version. The checks hold the two together: when the tag has moved away from the pinned commit,
+the run says so, and the submission is updated on purpose or taken up with the maintainer.
 
 ### The channels
 
@@ -139,9 +155,10 @@ Opening a pull request runs the stages a merge will run, stopping before the sig
    itself checked.
 2. **The file** — the shape above, the namespace, the tag pattern, the channels and the targets
    they take their packages from, and the title's uniqueness across the catalog.
-3. **The app against the file** — the tag's manifest is read on its own, through a sparse checkout
-   that leaves the source behind. `day metadata --json` has to report `org.appfair.app.<token>`, a
-   version matching the tag, and the targets the file asks for.
+3. **The app against the file** — the pinned commit's manifest is read on its own, through a
+   sparse checkout that leaves the source behind. `day metadata --json` has to report
+   `org.appfair.app.<token>`, a version matching the tag, and the targets the file asks for, and
+   the tag still has to point at the commit the submission pinned.
 4. **The build** (stage A) — `day lint`, then `day pack --no-sign` for each target. This is the
    only stage that runs anything the app supplied, and it holds no credentials, so opening a pull
    request cannot publish anything or reach a key.
@@ -192,12 +209,16 @@ error — a maintainer of this repository runs the `publish` workflow manually w
 
 ## Updating an app
 
-Change `tag`. That is the whole update:
+Change `tag` and `commit`. That is the whole update:
 
 ```diff
 -tag: v1.9.0
+-commit: 026ae1d62a8c49b1b0793aed8b5a2a0064ba95b6
 +tag: v1.9.1
++commit: 8b03beeedf19b241954b31678ac8e3fbc816dcc7
 ```
+
+`scripts/queue.py resolve --token <token> --tag <tag>` prints both lines.
 
 Everything else follows from the app's repository at the new tag. An app that changes its title
 changes this file too, because the catalog's uniqueness rule is about the displayed title.
@@ -207,7 +228,7 @@ changes this file too, because the catalog's uniqueness rule is about the displa
 | where | what to do |
 |---|---|
 | the file's checks | read the annotation, fix the file, push to the same branch |
-| the app's checks | the app and the submission disagree, usually about the flavor's id or version. Fix it in the app, tag again, update `tag` here |
+| the app's checks | the app and the submission disagree, usually about the flavor's id or version, or the tag has moved off the pinned commit. Fix it in the app, tag again, update `tag` and `commit` here |
 | the build | the app does not build at that tag on that target. It is the app's build, so it is fixed in the app's repository |
 | identity or permissions | the package and the manifest disagree. Both come from the app, so the fix is there |
 | the comparison | see above: reproduce, or have a maintainer waive it with the label |

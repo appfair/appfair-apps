@@ -16,6 +16,11 @@ token-pattern: '^[A-Za-z][A-Za-z0-9-]{1,38}$'
 # released, and it has to still be there a year from now.
 tag-pattern: '^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$'
 
+# ...and the commit that tag pointed at when the submission was written. A tag can be moved, and
+# a submission reviewed at one commit and published from another would be a review of nothing, so
+# every stage checks out the commit and the tag is held against it.
+commit-pattern: '^[0-9a-f]{40}$'
+
 # Where an app can be published, and what each channel is. A submission names its channels under
 # the target that builds for them, so the pairing is part of the file rather than a rule that
 # checks two lists against each other, and a target can feed more than one channel.
@@ -53,6 +58,14 @@ channels:
     target: android-mdc
     options: [submit]
     status: planned
+
+# The Day build flavor every submission is built with. It follows this catalog's name — the
+# `appfair-apps` queue builds each app's `appfair` flavor, and a fork called `gamesfair-apps`
+# builds its `gamesfair` one — so a fork changes nothing here. That flavor's manifest
+# (`Day-<flavor>.toml` in the app) is where the identity the app is published under lives, which
+# is why the queue names it and a submission cannot.
+#
+# flavor: appfair
 
 # Which day CLI the queue builds every submission with. `main` tracks the framework; a released
 # version freezes what the catalog builds against.

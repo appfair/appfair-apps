@@ -13,7 +13,7 @@ Specialized templates, if you prefer one:
 
 - **Token:** <!-- Faire-Games -->
 - **Title:** <!-- Fair Games -->
-- **Repository and tag:** <!-- https://github.com/Faire-Games/Faire-Games at v1.9.0 -->
+- **Tag and commit:** <!-- v2.0.0 at 8b03beeedf19b241954b31678ac8e3fbc816dcc7 -->
 - **Channels:** <!-- apple-app-store, google-play-store -->
 
 ## What this changes
@@ -23,11 +23,12 @@ Specialized templates, if you prefer one:
 
 ## Confirmations
 
-- [ ] The tag exists in the app's repository and is the version to publish.
+- [ ] The tag exists in the app's repository, points at the pinned commit, and is the version
+      to publish.
 - [ ] Its release carries the packages the app's CI built (`.aab`, `.ipa`), which the App Fair's
       own build is compared against.
-- [ ] The app builds under `org.appfair.app.<token>` — its `Day.toml`, or the Day flavor this
-      submission names, states that bundle id.
+- [ ] The app builds under `org.appfair.app.<token>`: its `Day-appfair.toml` states that bundle
+      id, and the version and build number climb past what the stores already have.
 - [ ] The app meets the [inclusion criteria](https://appfair.org/docs/inclusion-criteria/).
 - [ ] The app is free of advertising, tracking, analytics, gambling and cryptocurrency.
 - [ ] The store listing in the app's repository (`store/`, or the flavor's `store-<name>/`) is

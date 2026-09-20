@@ -12,7 +12,10 @@ inputs:
     description: The app's repository, as owner/name.
     required: true
   ref:
-    description: The tag the submission names.
+    description: The commit the submission pins, which is what stage A built.
+    required: true
+  tag:
+    description: The tag that commit was released under, for finding the release assets.
     required: true
   target:
     description: The Day target these packages were built for.
@@ -117,9 +120,9 @@ runs:
         # The App Fair ships the build above. This downloads what the maintainer built from the
         # same tag so the two can be compared; a release that carries no counterpart leaves the
         # submission unverifiable, which the comparison step reports.
-        if ! gh release download "${{ inputs.ref }}" --repo "${{ inputs.repo }}" \
+        if ! gh release download "${{ inputs.tag }}" --repo "${{ inputs.repo }}" \
              --pattern "*.${{ steps.pick.outputs.ext }}" --dir release 2>release.err; then
-          echo "::warning::no ${{ steps.pick.outputs.ext }} asset on ${{ inputs.repo }} ${{ inputs.ref }}: $(cat release.err)"
+          echo "::warning::no ${{ steps.pick.outputs.ext }} asset on ${{ inputs.repo }} ${{ inputs.tag }}: $(cat release.err)"
         fi
         ls -l release || true
 
@@ -133,7 +136,7 @@ runs:
             echo "::warning::the release carries no .${{ steps.pick.outputs.ext }}; the comparison was waived by label"
             exit 0
           fi
-          echo "::error file=apps/${{ inputs.token }}.yaml::${{ inputs.repo }} ${{ inputs.ref }} publishes no .${{ steps.pick.outputs.ext }}, so this build has nothing to be checked against"
+          echo "::error file=apps/${{ inputs.token }}.yaml::${{ inputs.repo }} ${{ inputs.tag }} publishes no .${{ steps.pick.outputs.ext }}, so this build has nothing to be checked against"
           exit 1
         fi
         python3 scripts/queue.py compare \
@@ -144,16 +147,15 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        COMMIT=$(git ls-remote "https://github.com/${{ inputs.repo }}" "refs/tags/${{ inputs.ref }}^{}" | cut -f1)
-        [ -n "$COMMIT" ] || COMMIT=$(git ls-remote "https://github.com/${{ inputs.repo }}" "refs/tags/${{ inputs.ref }}" | cut -f1)
-        echo "tag ${{ inputs.ref }} is $COMMIT"
+        # The commit the submission pins is what every stage checked out, so it is what this
+        # build's own provenance has to name.
         python3 scripts/queue.py audit \
           --app "${{ inputs.token }}" \
           --report report.json \
           --metadata metadata.json \
           --target "${{ inputs.target }}" \
           --sidecars "${{ inputs.packages }}" \
-          --expect-commit "$COMMIT"
+          --expect-commit "${{ inputs.ref }}"
 
     - name: Scan it
       shell: bash
