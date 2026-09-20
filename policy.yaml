@@ -106,8 +106,21 @@ ignore-in-comparison:
   - "*.kotlin_module"
   - "stamp-cert-sha256"
 
-# What a difference between the two builds does: `block` stops the submission, `advisory` records
-# it and continues. A maintainer re-runs a blocked submission with the label below.
+# Paths allowed to differ between the two builds. A flavor states a different display name, and
+# day compiles that name into the app through `day_build::app_title()`, so the native code a
+# flavor build produces cannot match the base release byte for byte. A difference in one of these
+# is reported and passes; a difference anywhere else — another file, a changed asset, different
+# DEX, an extra library — still counts.
+#
+# Patterns are matched with fnmatch against the comparison's keys, where the iOS bundle is keyed
+# as `Payload/App.app` and its main binary as `<executable>`.
+expected-differences:
+  - "base/lib/*/libdayapp.so"
+  - "Payload/App.app/<executable>"
+
+# What an unexpected difference between the two builds does: `block` stops the submission,
+# `advisory` records it and continues. A maintainer re-runs a blocked submission with the label
+# below.
 mismatch: block
 override-label: allow-mismatch
 

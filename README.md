@@ -64,11 +64,14 @@ complete.
   through day's catalogue, plus the baseline the framework adds.
 - **Comparison with the app's own release.** The App Fair builds the flavor; the app's CI
   publishes the base app. The comparison normalizes each side's declared package id, version and
-  build, display name, URL scheme, and package-qualified authorities and permissions. Day's
-  launcher icons, signing records and Android debug-symbol sidecars are excluded. Resource tables
-  and iOS asset catalogs are decoded, so other resources, permissions, components, native binaries
-  and DEX must match. `compare.json` lists every normalized and excluded path. Unexpected
-  differences block publication until a maintainer waives them. Missing or ambiguous base assets,
+  build, display name, URL scheme, bundle and executable names, and package-qualified authorities
+  and permissions. Day's launcher icons, signing records and Android debug-symbol sidecars are
+  excluded. Resource tables and iOS asset catalogs are decoded, so other resources, permissions,
+  components and DEX must match. Day compiles the display name into the app, so the app's own
+  binary cannot match the base release; `policy.yaml: expected-differences` names those paths, and
+  a difference in one of them is reported and allowed. `compare.json` lists every normalized,
+  excluded and expected path. Any other difference blocks publication until a maintainer waives
+  it. Missing or ambiguous base assets,
   unreadable metadata and an identity that disagrees with the manifest always fail, and a flavor
   package is never substituted for the base release.
 - **Safety.** ClamAV over every file, and the provenance and SBOM beside the package checked

@@ -50,6 +50,14 @@ def normalize_plist(data, app):
         if str(info.get(key, "")) != str(app[field]):
             raise ValueError(f"{key}: package has {info.get(key)!r}, manifest declares {app[field]!r}")
         info[key] = f"<{field}>"
+    # The executable is named after the app, and CFBundleName is its product name, so both are
+    # replaced by their role. What the executable contains is still compared, under the key the
+    # payload gives it.
+    executable = str(info.get("CFBundleExecutable", ""))
+    if executable:
+        info["CFBundleExecutable"] = "<executable>"
+        if info.get("CFBundleName") == executable:
+            info["CFBundleName"] = "<name>"
     # Keep undeclared/custom labels and URLs visible; only the declared identity is replaced.
     for key in ["CFBundleDisplayName", "CFBundleName"]:
         if info.get(key) == app.get("title"):
@@ -141,13 +149,23 @@ def payload(path, metadata=None, target=None, aapt2=None):
                  if re.fullmatch(r"Payload/[^/]+\.app/Info\.plist", n)]
         if app and target == "ios-uikit" and len(roots) != 1:
             raise ValueError("iOS comparison expects exactly one main app")
+        # The bundle and its executable are named after the app, so both sides are keyed by role:
+        # the bundle as Payload/App.app and the executable as <executable> inside it. Their
+        # contents are still compared.
+        executable = ""
+        if app and target == "ios-uikit":
+            executable = str(plistlib.loads(package.read(roots[0] + "Info.plist"))
+                             .get("CFBundleExecutable", ""))
         for name in names:
             if signing_file(name) or name.startswith("BUNDLE-METADATA/com.android.tools.build.debugsymbols/"):
                 normalized.append(name)
                 continue
             key = name
             if app and target == "ios-uikit" and name.startswith(roots[0]):
-                key = "Payload/App.app/" + name[len(roots[0]):]
+                inside = name[len(roots[0]):]
+                if executable and inside == executable:
+                    inside = "<executable>"
+                key = "Payload/App.app/" + inside
             data = package.read(name)
             if app and target == "ios-uikit":
                 if name == roots[0] + "Info.plist":

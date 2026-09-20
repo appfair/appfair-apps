@@ -62,9 +62,10 @@ those two numbers and reject anything that repeats or lowers them.
 
 The tag also needs a release carrying the packages the app's own CI built: an `.aab` for Android,
 an `.ipa` for iOS. These are the **base app's** packages, so the app's existing release workflow
-is enough and the flavor's packages never have to be published. The comparison covers executable
-content and non-branding resources while normalizing identities and launcher icons, and the
-flavor's package id, version, permissions and provenance are checked against its own manifest.
+is enough and the flavor's packages never have to be published. The comparison covers resources, components
+and DEX while normalizing identities and launcher icons and allowing the app's own binary to
+differ, and the flavor's package id, version, permissions and provenance are checked against its
+own manifest.
 
 The source tag may be `v2.0.1` while the store flavor is version `1.9.0`: the tag pins the source
 commit, and the flavor's version sequence belongs to its store listing. An app built with the
@@ -180,7 +181,7 @@ A pull request runs the stages a merge runs, stopping before the signing.
    | inventory | nothing; it records every file with its digest |
    | identity | a bundle id, version or build number that disagrees with the manifest |
    | permissions | a permission the app never declared |
-   | comparison | content differing from the app's own release of the same commit |
+   | comparison | content differing from the app's own release of the same commit, beyond the app's own binary |
    | provenance | a missing SBOM, a commit other than the pinned one, or a build from a dirty checkout |
    | scan | ClamAV finding something |
 
@@ -190,9 +191,13 @@ change.
 ### When the comparison differs
 
 The App Fair publishes the build it made, checked against the release the app's CI published from
-the same commit. A difference means one of the two is not reproducible from that source: a
-timestamp baked into an asset, a dependency resolved differently, a different toolchain version.
-The run lists the differing files.
+the same commit. Identity is normalized on both sides, and the app's own binary is expected to
+differ, since day compiles the display name into it and the flavor states a different one —
+`policy.yaml: expected-differences` names those paths and the run reports them as expected.
+
+Any other difference means one of the two builds is not reproducible from that source: a timestamp
+baked into an asset, a dependency resolved differently, a different toolchain version. The run
+lists the differing files.
 
 Either fix the cause and tag again, or, once a maintainer of this repository understands and
 accepts the difference, apply the `allow-mismatch` label and re-run. The label is recorded in the

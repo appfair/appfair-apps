@@ -1381,6 +1381,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
 
     policy_raw = load_yaml(ROOT / "policy.yaml")
     ignore = list(policy_raw.get("ignore-in-comparison", []))
+    expected_patterns = list(policy_raw.get("expected-differences", []))
     options = [args.metadata, args.reference_metadata, args.target]
     if any(options) and not all(options):
         Problem("compare", "--metadata, --reference-metadata and --target must be supplied together").emit()
@@ -1401,6 +1402,16 @@ def cmd_compare(args: argparse.Namespace) -> int:
     changed = sorted(k for k in set(ours) & set(theirs) if ours[k] != theirs[k])
     same = len(set(ours) & set(theirs)) - len(changed)
 
+    # The flavor's display name is compiled in, so the app's own binary cannot match the base
+    # release. policy.yaml names those paths; everything else still has to agree.
+    def expected(path: str) -> bool:
+        return any(fnmatch.fnmatch(path, pattern) for pattern in expected_patterns)
+
+    allowed = sorted(p for p in changed + only_ours + only_theirs if expected(p))
+    changed = [p for p in changed if not expected(p)]
+    only_ours = [p for p in only_ours if not expected(p)]
+    only_theirs = [p for p in only_theirs if not expected(p)]
+
     result = {
         "ours": Path(args.ours).name,
         "theirs": Path(args.theirs).name,
@@ -1409,6 +1420,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
         "changed": changed,
         "only-in-ours": only_ours,
         "only-in-theirs": only_theirs,
+        "expected-differences": allowed,
     }
     if args.out:
         Path(args.out).write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
@@ -1420,6 +1432,12 @@ def cmd_compare(args: argparse.Namespace) -> int:
         f"{same} file(s) identical, {len(changed)} differing, {len(only_ours)} only in this "
         f"build, {len(only_theirs)} only in the release.",
     ]
+    if allowed:
+        lines += [
+            "",
+            f"{len(allowed)} path(s) carry the flavor's own identity and are expected to differ: "
+            + ", ".join(f"`{path}`" for path in allowed),
+        ]
     if differences:
         listed = (changed + only_ours + only_theirs)[:20]
         lines += ["", "```text"] + listed + (["…"] if differences > 20 else []) + ["```"]
@@ -1427,8 +1445,11 @@ def cmd_compare(args: argparse.Namespace) -> int:
 
     print(
         f"compared {result['ours']}: {same} identical, {len(changed)} differing, "
-        f"{len(only_ours)} extra here, {len(only_theirs)} extra there"
+        f"{len(only_ours)} extra here, {len(only_theirs)} extra there, "
+        f"{len(allowed)} expected to differ"
     )
+    for path in allowed:
+        print(f"         expected difference: {path}")
     if not differences:
         return 0
     if args.allow_mismatch:
@@ -1852,8 +1873,8 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
     raw = load_yaml(ROOT / "policy.yaml")
     required = [
         "id-namespace", "token-pattern", "tag-pattern", "commit-pattern", "channels",
-        "day-version", "review", "ignore-in-comparison", "mismatch", "override-label",
-        "virus-scan", "baseline-permissions", "app-data-paths",
+        "day-version", "review", "ignore-in-comparison", "expected-differences", "mismatch",
+        "override-label", "virus-scan", "baseline-permissions", "app-data-paths",
     ]
     missing = [key for key in required if key not in raw]
     if missing:
@@ -1891,6 +1912,24 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
     else:
         failures += 1
         print("FAIL an update lost the file around the two lines it changes")
+
+    # The paths a flavor build cannot match: the app's own binary carries the display name day
+    # compiles into it. They are reported and allowed; anything else still counts.
+    import fnmatch as _fnmatch
+
+    patterns = load_yaml(ROOT / "policy.yaml")["expected-differences"]
+    allowed = ["base/lib/arm64-v8a/libdayapp.so", "Payload/App.app/<executable>"]
+    refused = [
+        "base/lib/arm64-v8a/libother.so", "base/dex/classes.dex", "base/assets/sounds/a.wav",
+        "Payload/App.app/Info.plist", "Payload/App.app/assets/sounds/a.wav",
+    ]
+    wrong = [p for p in allowed if not any(_fnmatch.fnmatch(p, q) for q in patterns)]
+    wrong += [p for p in refused if any(_fnmatch.fnmatch(p, q) for q in patterns)]
+    if wrong:
+        failures += 1
+        print(f"FAIL expected-differences classifies these wrongly: {wrong}")
+    else:
+        print("ok   expected-differences covers the app's binary and nothing else")
 
     # The reviewer's comment: an update names both commits, a first submission says there is
     # nothing to compare against, and a highlighted path is one a reviewer should open.

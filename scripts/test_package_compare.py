@@ -72,6 +72,38 @@ class ComparisonTests(unittest.TestCase):
                              flavor, "ios-uikit")
             self.assertNotEqual(a, bad)
 
+    def named_ipa(self, name, meta, bundle, executable, binary=b"native executable"):
+        """An .ipa whose bundle and executable are named after the app, as Xcode writes them."""
+        app = meta["project"]
+        info = plistlib.loads(plist(meta))
+        info["CFBundleExecutable"] = executable
+        info["CFBundleName"] = executable
+        files = {f"Payload/{bundle}.app/Info.plist": plistlib.dumps(info),
+                 f"Payload/{bundle}.app/{executable}": binary,
+                 f"Payload/{bundle}.app/data.json": b'{"level": 1}',
+                 f"Payload/{bundle}.app/AppIcon60x60@2x.png": app["title"].encode()}
+        path = self.root / name
+        with zipfile.ZipFile(path, "w") as z:
+            for filename, data in files.items():
+                z.writestr(filename, data)
+        return path
+
+    def test_renamed_bundle_and_executable_are_compared_by_role(self):
+        base, flavor = metadata(), metadata(True)
+        a, _ = payload(self.named_ipa("base.ipa", base, "DayGames", "DayGames"), base, "ios-uikit")
+        b, _ = payload(self.named_ipa("flavor.ipa", flavor, "FairGames", "FairGames"), flavor,
+                       "ios-uikit")
+        # The bundle name, the executable name and the plist keys that carry them are identity,
+        # so a flavor that renames the app compares equal to the base it was built from.
+        self.assertEqual(a, b)
+        self.assertIn("Payload/App.app/<executable>", a)
+        # What the executable holds is still compared under that key.
+        c, _ = payload(self.named_ipa("other.ipa", flavor, "FairGames", "FairGames", b"other code"),
+                       flavor, "ios-uikit")
+        self.assertNotEqual(a["Payload/App.app/<executable>"], c["Payload/App.app/<executable>"])
+        self.assertEqual({k: v for k, v in a.items() if k != "Payload/App.app/<executable>"},
+                         {k: v for k, v in c.items() if k != "Payload/App.app/<executable>"})
+
     def test_extra_permissions_are_not_metadata_exemptions(self):
         meta = metadata(True)
         info = plistlib.loads(plist(meta))
