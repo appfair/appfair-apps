@@ -1,4 +1,17 @@
 {
-  "apps": {},
-  "updated": ""
+  "apps": {
+    "Faire-Games": {
+      "channels": [
+        "apple-app-store",
+        "google-play-store"
+      ],
+      "id": "org.appfair.app.Faire-Games",
+      "published": "2026-09-21T04:28:03Z",
+      "repo": "https://github.com/Faire-Games/Faire-Games",
+      "run": "https://github.com/appfair/appfair-apps/actions/runs/35559867052",
+      "tag": "v2.0.2",
+      "title": "Fair Games"
+    }
+  },
+  "updated": "2026-09-21T04:28:03Z"
 }
