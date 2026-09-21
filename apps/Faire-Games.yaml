@@ -1,0 +1,10 @@
+# yaml-language-server: $schema=../schema/app.schema.json
+token: Faire-Games
+title: Fair Games
+tag: v2.0.2
+commit: ae794d9a12a00f7451875d5593438a3534cf666e
+distribution:
+  android-mdc:
+    - google-play-store
+  ios-uikit:
+    - apple-app-store
