@@ -106,6 +106,19 @@ runs:
       with:
         version: ${{ inputs.day-version }}
 
+    # The steps below read policy.yaml with PyYAML. Ubuntu runners ship a python3 that has it;
+    # macOS runners do not, and the first `import yaml` is where the job would otherwise stop.
+    - name: PyYAML for the queue's scripts
+      shell: bash
+      run: |
+        set -euo pipefail
+        if ! python3 -c "import yaml" 2>/dev/null; then
+          # --break-system-packages for a Homebrew python that marks itself externally managed.
+          pip3 install --quiet --disable-pip-version-check pyyaml \
+            || pip3 install --quiet --disable-pip-version-check --break-system-packages pyyaml
+        fi
+        python3 -c "import sys, yaml; print('PyYAML', yaml.__version__, 'on python', sys.version.split()[0])"
+
     - name: Normalize the signing inputs
       shell: bash
       env:

@@ -45,6 +45,10 @@ def signing_file(path):
 
 def normalize_plist(data, app):
     info = plistlib.loads(data)
+    # The build machine's own OS build, stamped by Xcode. Two runners of the same image generation
+    # carry different values, and it says nothing about the app. The DT* keys stay, because a
+    # different Xcode or SDK is a real difference between the two builds.
+    info.pop("BuildMachineOSBuild", None)
     for key, field in [("CFBundleIdentifier", "id"), ("CFBundleShortVersionString", "version"),
                        ("CFBundleVersion", "build")]:
         if str(info.get(key, "")) != str(app[field]):

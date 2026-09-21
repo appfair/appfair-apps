@@ -104,6 +104,23 @@ class ComparisonTests(unittest.TestCase):
         self.assertEqual({k: v for k, v in a.items() if k != "Payload/App.app/<executable>"},
                          {k: v for k, v in c.items() if k != "Payload/App.app/<executable>"})
 
+    def test_build_machine_os_is_normalized_but_the_toolchain_is_not(self):
+        base, flavor = metadata(), metadata(True)
+        def ipa(name, meta, extra):
+            info = plistlib.loads(plist(meta))
+            info.update(extra)
+            return self.ipa(name, meta, {"Payload/Game.app/Info.plist": plistlib.dumps(info)})
+        # Two runners of the same image generation stamp different OS builds.
+        a, _ = payload(ipa("base.ipa", base, {"BuildMachineOSBuild": "26A428",
+                                              "DTXcodeBuild": "27A266a"}), base, "ios-uikit")
+        b, _ = payload(ipa("flavor.ipa", flavor, {"BuildMachineOSBuild": "26A5406e",
+                                                  "DTXcodeBuild": "27A266a"}), flavor, "ios-uikit")
+        self.assertEqual(a["Payload/App.app/Info.plist"], b["Payload/App.app/Info.plist"])
+        # A different Xcode is a real difference between the two builds.
+        c, _ = payload(ipa("other.ipa", flavor, {"BuildMachineOSBuild": "26A428",
+                                                 "DTXcodeBuild": "27B100"}), flavor, "ios-uikit")
+        self.assertNotEqual(a["Payload/App.app/Info.plist"], c["Payload/App.app/Info.plist"])
+
     def test_extra_permissions_are_not_metadata_exemptions(self):
         meta = metadata(True)
         info = plistlib.loads(plist(meta))

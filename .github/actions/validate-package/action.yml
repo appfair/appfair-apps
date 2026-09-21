@@ -45,6 +45,19 @@ inputs:
 runs:
   using: composite
   steps:
+    # The steps below read policy.yaml with PyYAML. Ubuntu runners ship a python3 that has it;
+    # macOS runners do not, and the first `import yaml` is where the job would otherwise stop.
+    - name: PyYAML for the queue's scripts
+      shell: bash
+      run: |
+        set -euo pipefail
+        if ! python3 -c "import yaml" 2>/dev/null; then
+          # --break-system-packages for a Homebrew python that marks itself externally managed.
+          pip3 install --quiet --disable-pip-version-check pyyaml \
+            || pip3 install --quiet --disable-pip-version-check --break-system-packages pyyaml
+        fi
+        python3 -c "import sys, yaml; print('PyYAML', yaml.__version__, 'on python', sys.version.split()[0])"
+
     # The app's manifest, store copy and translations, through a sparse checkout of the paths
     # policy.yaml lists. Source and build scripts stay off this runner.
     - name: Read the app's manifest paths from policy.yaml
@@ -162,19 +175,33 @@ runs:
           exit 0
         fi
         if [ "$(uname -s)" = Darwin ]; then
+          # Homebrew installs freshclam.conf.sample and no config, so this writes one. Nothing
+          # confines where freshclam reads it from here.
           brew list clamav >/dev/null 2>&1 || brew install clamav
+          mkdir -p "$RUNNER_TEMP/clamav"
+          printf 'DatabaseDirectory %s\nDatabaseMirror database.clamav.net\n' \
+            "$RUNNER_TEMP/clamav" > "$RUNNER_TEMP/freshclam.conf"
+          freshclam --quiet --config-file="$RUNNER_TEMP/freshclam.conf"
+          DATABASE="$RUNNER_TEMP/clamav"
         else
+          # Ubuntu's clamav-freshclam ships /etc/apparmor.d/usr.bin.freshclam, which lets
+          # freshclam read /etc/clamav/freshclam.conf and write /var/lib/clamav and nothing else.
+          # A config under RUNNER_TEMP is denied, and freshclam reports that as
+          # "Can't open/parse the config file", so the packaged pair is what this uses. clamscan
+          # carries no profile and reads the workspace.
           sudo apt-get update -qq
           sudo apt-get install -y -qq clamav >/dev/null
           sudo systemctl stop clamav-freshclam 2>/dev/null || true
+          # A missing clamd.conf makes freshclam complain about notifying a daemon that is not
+          # installed, after the signatures have downloaded, so the database decides this.
+          sudo freshclam --quiet || true
+          DATABASE=/var/lib/clamav
+          ls "$DATABASE"/main.c* >/dev/null 2>&1 || {
+            echo "::error::freshclam downloaded no ClamAV database"; exit 1; }
         fi
-        mkdir -p "$RUNNER_TEMP/clamav"
-        printf 'DatabaseDirectory %s\nDatabaseMirror database.clamav.net\n' \
-          "$RUNNER_TEMP/clamav" > "$RUNNER_TEMP/freshclam.conf"
-        freshclam --quiet --config-file="$RUNNER_TEMP/freshclam.conf"
         # clamscan reads archives itself, so the packages are scanned where they lie and nothing
         # is unpacked into a place anything might run it from.
-        clamscan --database="$RUNNER_TEMP/clamav" --recursive --infected --max-filesize=4000M --max-scansize=4000M "${{ inputs.packages }}"
+        clamscan --database="$DATABASE" --recursive --infected --max-filesize=4000M --max-scansize=4000M "${{ inputs.packages }}"
 
     - name: Keep the reports
       uses: actions/upload-artifact@v7
