@@ -123,8 +123,12 @@ def normalize_assets(data):
     return canonical(sorted(retained, key=lambda e: canonical(e)))
 
 
-def payload(path, metadata=None, target=None, aapt2=None):
-    """Return canonical file digests plus a list of explicitly excluded/normalized paths."""
+def payload(path, metadata=None, target=None, aapt2=None, origins=None):
+    """Return canonical file digests plus a list of explicitly excluded/normalized paths.
+
+    `origins`, when given, is filled with each comparison key's archive entry, so a caller can
+    reopen the file a difference is in.
+    """
     app = identity(metadata, target) if metadata else None
     result, normalized = {}, []
     with zipfile.ZipFile(path) as package, tempfile.TemporaryDirectory() as tmp:
@@ -197,4 +201,30 @@ def payload(path, metadata=None, target=None, aapt2=None):
                     normalized.append(name)
                     continue
             result[key] = digest(data)
+            if origins is not None:
+                origins[key] = name
     return result, normalized
+
+
+def describe_difference(ours, theirs, ours_name, theirs_name, ours_app=None, theirs_app=None):
+    """Why one path differs, in the terms the file itself is written in.
+
+    A property list is compared key by key after normalization, which is what turns "Info.plist
+    differs" into "these two builds used different Xcode versions". Anything else reports its
+    size, since its bytes are not for reading.
+    """
+    lines = []
+    with zipfile.ZipFile(ours) as one, zipfile.ZipFile(theirs) as two:
+        here, there = one.read(ours_name), two.read(theirs_name)
+        lines.append(f"{len(here):,} bytes here, {len(there):,} bytes in the release")
+        if not ours_name.endswith(".plist"):
+            return lines
+        try:
+            a = json.loads(normalize_plist(here, ours_app) if ours_app else canonical(plistlib.loads(here)))
+            b = json.loads(normalize_plist(there, theirs_app) if theirs_app else canonical(plistlib.loads(there)))
+        except (ValueError, plistlib.InvalidFileException):
+            return lines
+        for key in sorted(set(a) | set(b)):
+            if a.get(key) != b.get(key):
+                lines.append(f"{key}: {json.dumps(a.get(key))} here, {json.dumps(b.get(key))} in the release")
+    return lines

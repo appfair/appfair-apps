@@ -71,7 +71,10 @@ complete.
   binary cannot match the base release; `policy.yaml: expected-differences` names those paths, and
   a difference in one of them is reported and allowed. `compare.json` lists every normalized,
   excluded and expected path. Any other difference blocks publication until a maintainer waives
-  it. Missing or ambiguous base assets,
+  it, and the run says what it is: the two builds' tool versions side by side (day, rustc, Xcode,
+  NDK), each differing path, and for a property list the keys that disagree with both values.
+  Both builds run on the runner image `policy.yaml: runners` names, since a different Xcode
+  produces a different `Info.plist` and binary from the same source. Missing or ambiguous base assets,
   unreadable metadata and an identity that disagrees with the manifest always fail, and a flavor
   package is never substituted for the base release.
 - **Safety.** ClamAV over every file, and the provenance and SBOM beside the package checked

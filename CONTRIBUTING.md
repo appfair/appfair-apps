@@ -197,8 +197,9 @@ differ, since day compiles the display name into it and the flavor states a diff
 `policy.yaml: expected-differences` names those paths and the run reports them as expected.
 
 Any other difference means one of the two builds is not reproducible from that source: a timestamp
-baked into an asset, a dependency resolved differently, a different toolchain version. The run
-lists the differing files.
+baked into an asset, a dependency resolved differently, a different toolchain version. The run's
+summary names each differing file, what differs inside it, and how the two builds' tools compare,
+so a difference that comes from the toolchain reads as one.
 
 Either fix the cause and tag again, or, once a maintainer of this repository understands and
 accepts the difference, apply the `allow-mismatch` label and re-run. The label is recorded in the
