@@ -195,6 +195,8 @@ runs:
       if: inputs.target == 'ios-uikit'
       shell: bash
       env:
+        # fastlane reports usage to its own servers unless told not to.
+        FASTLANE_OPT_OUT_USAGE: "1"
         PROFILE_B64: ${{ inputs.apple-profile-b64 }}
         ASC_KEY_ID: ${{ env.APPFAIR_ASC_KEY_ID }}
         ASC_ISSUER: ${{ env.APPFAIR_ASC_ISSUER }}
@@ -285,6 +287,7 @@ runs:
       shell: bash
       working-directory: app-data/build/day/store/${{ inputs.target }}
       env:
+        FASTLANE_OPT_OUT_USAGE: "1"
         DAY_AAB: ${{ inputs.target == 'android-mdc' && steps.pick.outputs.package || '' }}
         DAY_IPA: ${{ inputs.target == 'ios-uikit' && steps.pick.outputs.package || '' }}
         DAY_ASC_KEY_ID: ${{ env.APPFAIR_ASC_KEY_ID }}
