@@ -137,6 +137,11 @@ runs:
              --pattern "*.${{ steps.pick.outputs.ext }}" --dir release 2>release.err; then
           echo "::warning::no ${{ steps.pick.outputs.ext }} asset on ${{ inputs.repo }} ${{ inputs.tag }}: $(cat release.err)"
         fi
+        # The provenance day writes beside each package. The comparison reads both sides' tool
+        # versions from these, which is what turns a differing file into a reason.
+        gh release download "${{ inputs.tag }}" --repo "${{ inputs.repo }}" \
+          --pattern "*.${{ steps.pick.outputs.ext }}.buildinfo.json" --dir release 2>/dev/null \
+          || echo "::warning::the release carries no buildinfo sidecar, so the two toolchains cannot be compared"
         ls -l release || true
 
     - name: Compare the two builds
@@ -203,7 +208,9 @@ runs:
         # is unpacked into a place anything might run it from.
         clamscan --database="$DATABASE" --recursive --infected --max-filesize=4000M --max-scansize=4000M "${{ inputs.packages }}"
 
+    # Kept whatever happened: a failing comparison is exactly when its report is wanted.
     - name: Keep the reports
+      if: always()
       uses: actions/upload-artifact@v7
       with:
         name: validation-${{ inputs.token }}-${{ inputs.target }}
@@ -212,4 +219,6 @@ runs:
           compare.json
           metadata.json
           base-metadata.json
+          ${{ inputs.packages }}/*.buildinfo.json
+          release/*.buildinfo.json
         if-no-files-found: warn

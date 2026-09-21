@@ -61,6 +61,15 @@ channels:
 #
 # flavor: appfair
 
+# The runner each target builds and validates on. It has to match what the app's own CI used,
+# because the comparison holds the two builds against each other: a different runner image means
+# a different Xcode, a different SDK, and an Info.plist and binary that cannot agree. `xcode-27`
+# is the floor daybrite/actions builds every app on, which is what publishes the release this
+# queue compares against.
+runners:
+  ios-uikit: xcode-27
+  android-mdc: ubuntu-latest
+
 # Which day CLI builds every submission. `main` tracks the framework; a released version pins it.
 day-version: main
 

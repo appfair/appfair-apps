@@ -98,6 +98,7 @@ class Policy:
     day_version: str
     review_highlights: list[str]
     review_max: int
+    runners: dict[str, str]
 
     @staticmethod
     def load(path: Path | None = None) -> "Policy":
@@ -125,6 +126,7 @@ class Policy:
                 str(pattern) for pattern in (raw.get("review") or {}).get("highlight-paths", [])
             ],
             review_max=int((raw.get("review") or {}).get("max-highlights", 20)),
+            runners={str(k): str(v) for k, v in (raw.get("runners") or {}).items()},
         )
 
     @property
@@ -423,6 +425,18 @@ def app_channels(app: App, policy: Policy) -> list[tuple[str, Channel]]:
     return out
 
 
+def runner_for(target: str, policy: Policy) -> str:
+    """The runner image a target builds on.
+
+    The comparison holds this build against the one the app's own CI published, so the image has
+    to be the one that CI used. A mismatch shows up as a differing Info.plist and a binary from
+    another SDK, which is a real difference rather than an artifact of the flavor.
+    """
+    if target in policy.runners:
+        return policy.runners[target]
+    return "macos-15" if target.startswith("ios") else "ubuntu-latest"
+
+
 def matrix_entry(app: App, policy: Policy) -> dict:
     """One row per app, holding what every stage needs from the submission."""
     pairs = app_channels(app, policy)
@@ -442,14 +456,10 @@ def matrix_entry(app: App, policy: Policy) -> dict:
     }
 
 
-def build_rows(entry: dict) -> list[dict]:
+def build_rows(entry: dict, policy: Policy) -> list[dict]:
     """One row per target: the build and the validation of what it produced."""
     return [
-        dict(
-            entry,
-            target=target,
-            runner="macos-15" if target == "ios-uikit" else "ubuntu-latest",
-        )
+        dict(entry, target=target, runner=runner_for(target, policy))
         for target in entry["targets"].split(",")
         if target
     ]
@@ -464,7 +474,7 @@ def publish_rows(app: App, entry: dict, policy: Policy) -> list[dict]:
             dict(
                 entry,
                 target=target,
-                runner="macos-15" if target == "ios-uikit" else "ubuntu-latest",
+                runner=runner_for(target, policy),
                 channel=channel.name,
                 # `upload` puts the build on the channel and stops; `submit: true` under the
                 # channel runs the lane that requests review.
@@ -506,7 +516,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
     matrix = json.dumps({"include": entries}, separators=(",", ":"))
     # Two more matrices, because the stages fan out differently. A build happens once per target;
     # a submission happens once per channel, and a target can feed several.
-    builds = [row for entry in entries for row in build_rows(entry)]
+    builds = [row for entry in entries for row in build_rows(entry, policy)]
     publishes = [
         row for app, entry in zip(apps, entries) for row in publish_rows(app, entry, policy)
     ]
@@ -1390,10 +1400,45 @@ def write_summary(lines: list[str]) -> None:
 # --------------------------------------------------------------------------------------------
 
 
+def build_tools(package: Path) -> dict[str, str]:
+    """What built a package, from the `<package>.buildinfo.json` day writes beside it."""
+    sidecar = package.with_name(package.name + ".buildinfo.json")
+    if not sidecar.exists():
+        return {}
+    try:
+        data = json.loads(sidecar.read_text())
+    except (OSError, ValueError):
+        return {}
+    tools = {
+        str(tool.get("key", "")): str(tool.get("version", "")).strip()
+        for tool in data.get("tools", [])
+    }
+    host = data.get("host") or {}
+    if host:
+        tools["host"] = f"{host.get('os', '?')} {host.get('arch', '?')}"
+    return {key: value for key, value in tools.items() if key and value}
+
+
+def toolchain_table(ours: dict[str, str], theirs: dict[str, str]) -> tuple[list[str], list[str]]:
+    """The two builds' tools side by side, and the names of the ones that disagree.
+
+    A different Xcode, NDK or rustc is the usual reason two builds of one commit differ, and it
+    is the first thing a reviewer needs to see when they do.
+    """
+    if not ours and not theirs:
+        return [], []
+    differing = [k for k in sorted(set(ours) | set(theirs)) if ours.get(k) != theirs.get(k)]
+    rows = ["| tool | this build | the app's release |", "|---|---|---|"]
+    for key in sorted(set(ours) | set(theirs)):
+        mark = " ⚠️" if key in differing else ""
+        rows.append(f"| `{key}`{mark} | {ours.get(key, '—')} | {theirs.get(key, '—')} |")
+    return rows, differing
+
+
 def cmd_compare(args: argparse.Namespace) -> int:
     """Compare the queue's flavored payload with the base release, normalizing declared metadata."""
     import fnmatch
-    from package_compare import payload
+    from package_compare import describe_difference, identity, payload
 
     policy_raw = load_yaml(ROOT / "policy.yaml")
     ignore = list(policy_raw.get("ignore-in-comparison", []))
@@ -1405,8 +1450,14 @@ def cmd_compare(args: argparse.Namespace) -> int:
     try:
         ours_meta = json.loads(Path(args.metadata).read_text()) if args.metadata else None
         theirs_meta = json.loads(Path(args.reference_metadata).read_text()) if args.reference_metadata else None
-        ours, normalized_ours = payload(Path(args.ours), ours_meta, args.target, find_aapt2())
-        theirs, normalized_theirs = payload(Path(args.theirs), theirs_meta, args.target, find_aapt2())
+        ours_origins: dict[str, str] = {}
+        theirs_origins: dict[str, str] = {}
+        ours, normalized_ours = payload(
+            Path(args.ours), ours_meta, args.target, find_aapt2(), ours_origins
+        )
+        theirs, normalized_theirs = payload(
+            Path(args.theirs), theirs_meta, args.target, find_aapt2(), theirs_origins
+        )
     except (ValueError, OSError, subprocess.SubprocessError) as error:
         Problem("compare", str(error)).emit()
         return 1
@@ -1428,6 +1479,24 @@ def cmd_compare(args: argparse.Namespace) -> int:
     only_ours = [p for p in only_ours if not expected(p)]
     only_theirs = [p for p in only_theirs if not expected(p)]
 
+    ours_tools = build_tools(Path(args.ours))
+    theirs_tools = build_tools(Path(args.theirs))
+    tool_rows, differing_tools = toolchain_table(ours_tools, theirs_tools)
+
+    # What each difference is, read out of the file it is in. Without this a run says only that
+    # a count of files disagree, which is not something anyone can act on.
+    detail: dict[str, list[str]] = {}
+    for path in changed[:20]:
+        try:
+            detail[path] = describe_difference(
+                Path(args.ours), Path(args.theirs),
+                ours_origins[path], theirs_origins[path],
+                ours_meta and identity(ours_meta, args.target),
+                theirs_meta and identity(theirs_meta, args.target),
+            )
+        except (KeyError, OSError, ValueError) as error:
+            detail[path] = [f"could not be read: {error}"]
+
     result = {
         "ours": Path(args.ours).name,
         "theirs": Path(args.theirs).name,
@@ -1437,6 +1506,8 @@ def cmd_compare(args: argparse.Namespace) -> int:
         "only-in-ours": only_ours,
         "only-in-theirs": only_theirs,
         "expected-differences": allowed,
+        "why": detail,
+        "tools": {"ours": ours_tools, "theirs": theirs_tools, "differing": differing_tools},
     }
     if args.out:
         Path(args.out).write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
@@ -1454,9 +1525,27 @@ def cmd_compare(args: argparse.Namespace) -> int:
             f"{len(allowed)} path(s) carry the flavor's own identity and are expected to differ: "
             + ", ".join(f"`{path}`" for path in allowed),
         ]
+    if tool_rows:
+        lines += ["", "#### How the two were built", ""] + tool_rows
+        if differing_tools:
+            lines += [
+                "",
+                "The two builds did not use the same "
+                + ", ".join(f"`{tool}`" for tool in differing_tools)
+                + ". Until that matches what the app's CI used, differences below follow from"
+                " the toolchain rather than from the source.",
+            ]
     if differences:
-        listed = (changed + only_ours + only_theirs)[:20]
-        lines += ["", "```text"] + listed + (["…"] if differences > 20 else []) + ["```"]
+        lines += ["", "#### What differs", ""]
+        for path in (changed + only_ours + only_theirs)[:20]:
+            where = (
+                " (only in this build)" if path in only_ours
+                else " (only in the release)" if path in only_theirs else ""
+            )
+            lines.append(f"- `{path}`{where}")
+            lines += [f"  - {line}" for line in detail.get(path, [])[:12]]
+        if differences > 20:
+            lines.append(f"- …and {differences - 20} more")
     write_summary(lines)
 
     print(
@@ -1466,6 +1555,16 @@ def cmd_compare(args: argparse.Namespace) -> int:
     )
     for path in allowed:
         print(f"         expected difference: {path}")
+    for tool in differing_tools:
+        print(
+            f"         tool mismatch: {tool} is "
+            f"{ours_tools.get(tool, 'absent')!r} here and "
+            f"{theirs_tools.get(tool, 'absent')!r} in the app's release"
+        )
+    for path in (changed + only_ours + only_theirs)[:20]:
+        print(f"         differs: {path}")
+        for line in detail.get(path, [])[:12]:
+            print(f"                  {line}")
     if not differences:
         return 0
     if args.allow_mismatch:
@@ -1475,10 +1574,16 @@ def cmd_compare(args: argparse.Namespace) -> int:
         else:
             print(message, file=sys.stderr)
         return 0
+    cause = (
+        f"; the two builds used different {', '.join(differing_tools)}, which is the likely cause"
+        if differing_tools
+        else ""
+    )
     Problem(
         result["ours"],
-        f"{differences} file(s) differ from the same tag's release asset; a maintainer can "
-        f"re-run with the override label once the cause is understood",
+        f"{differences} file(s) differ from the same tag's release asset{cause}. "
+        f"The run's summary and compare.json name each one and what differs inside it; a "
+        f"maintainer can re-run with the override label once the cause is understood",
     ).emit()
     return 1
 
@@ -1889,7 +1994,7 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
     raw = load_yaml(ROOT / "policy.yaml")
     required = [
         "id-namespace", "token-pattern", "tag-pattern", "commit-pattern", "channels",
-        "day-version", "review", "ignore-in-comparison", "expected-differences", "mismatch",
+        "day-version", "runners", "review", "ignore-in-comparison", "expected-differences", "mismatch",
         "override-label", "virus-scan", "baseline-permissions", "app-data-paths",
     ]
     missing = [key for key in required if key not in raw]
@@ -1928,6 +2033,15 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
     else:
         failures += 1
         print("FAIL an update lost the file around the two lines it changes")
+
+    # Every target a channel takes a package from is built somewhere, and on the image the app's
+    # own CI used, or the comparison reports a toolchain difference instead of a clean match.
+    missing = [t for t in policy.buildable_targets if t not in policy.runners]
+    if missing:
+        failures += 1
+        print(f"FAIL policy.yaml names no runner for: {', '.join(missing)}")
+    else:
+        print("ok   every buildable target names the runner it is built on")
 
     # The paths a flavor build cannot match: the app's own binary carries the display name day
     # compiles into it. They are reported and allowed; anything else still counts.
