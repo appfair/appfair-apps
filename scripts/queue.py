@@ -520,6 +520,16 @@ def cmd_plan(args: argparse.Namespace) -> int:
     publishes = [
         row for app, entry in zip(apps, entries) for row in publish_rows(app, entry, policy)
     ]
+    # One channel, for publishing again after a store-side failure without repeating the upload
+    # the other channel already accepted.
+    if args.channel:
+        publishes = [row for row in publishes if row["channel"] == args.channel]
+        if not publishes:
+            Problem("plan", f"no submission here publishes to {args.channel!r}").emit()
+            return 1
+        wanted = {row["target"] for row in publishes}
+        builds = [row for row in builds if row["target"] in wanted]
+
     build_matrix = json.dumps({"include": builds}, separators=(",", ":"))
     publish_matrix = json.dumps({"include": publishes}, separators=(",", ":"))
     summary = [
@@ -2152,6 +2162,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--changed-from", help="git ref to diff against (default: origin/main)")
     p.add_argument("--changed", nargs="*", help="explicit changed paths, in place of a git diff")
     p.add_argument("--app", help="one token, in place of a git diff")
+    p.add_argument("--channel", help="publish to this channel alone, for a re-run")
     p.set_defaults(func=cmd_plan)
 
     p = sub.add_parser("review", help="summarize the source changes a submission proposes")

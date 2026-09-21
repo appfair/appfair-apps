@@ -23,6 +23,12 @@ on:
         description: The app token to publish again, as `apps/<token>.yaml` names it.
         required: true
         type: string
+      channel:
+        description: >-
+          Publish to this channel alone, such as google-play-store. Empty publishes to every
+          channel the submission names, which is what a merge does.
+        required: false
+        type: string
       allow-mismatch:
         description: Accept differences from the maintainer's release for this run.
         required: false
@@ -52,7 +58,8 @@ jobs:
         run: |
           set -euo pipefail
           if [ -n "${{ inputs.app }}" ]; then
-            python3 scripts/queue.py plan --app "${{ inputs.app }}"
+            python3 scripts/queue.py plan --app "${{ inputs.app }}" \
+              ${{ inputs.channel && format('--channel {0}', inputs.channel) || '' }}
           else
             python3 scripts/queue.py plan --changed-from "${{ github.event.before }}"
           fi
