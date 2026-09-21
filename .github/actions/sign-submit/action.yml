@@ -312,6 +312,23 @@ runs:
     # binary, while the version it belongs to can still be sitting in Prepare for Submission with
     # nothing attached. Ask App Store Connect what the records say, and fail when they do not say
     # what this run claimed.
+    - name: Confirm the submission with Google Play
+      if: inputs.channel == 'google-play-store'
+      shell: bash
+      env:
+        APPFAIR_PLAY_KEY_PATH: ${{ env.APPFAIR_PLAY_KEY_PATH }}
+      run: |
+        set -euo pipefail
+        (cd app-data && "$DAY_BIN" --flavor "${{ inputs.flavor }}" metadata --json) \
+          > submitted-metadata.json 2>/dev/null
+        # The lane decides which track to look in, and what the release there has to be.
+        case "${{ inputs.lane }}" in
+          *release) TRACK=production; EXPECT=submitted ;;
+          *) TRACK=internal; EXPECT=uploaded ;;
+        esac
+        python3 scripts/play_state.py --metadata submitted-metadata.json \
+          --target "${{ inputs.target }}" --track "$TRACK" --expect "$EXPECT"
+
     - name: Confirm the submission with App Store Connect
       if: inputs.channel == 'apple-app-store'
       shell: bash

@@ -82,10 +82,14 @@ complete.
 
 **Stage C** requests the app's App Store profile from Apple, signs with `day sign apply`, which
 re-signs a package without rebuilding it, and uploads through the fastlane lanes `day store stage`
-generates from the app's listing. It then asks App Store Connect what the records say and fails
-when they disagree with what the run claimed: an upload leaves the version in Prepare for
-Submission with no build attached, and a lane that submits has to end with this build attached and
-the version waiting for review.
+generates from the app's listing. Submitting is what publishing means here, so the
+lanes ask Apple for review and Google for a production rollout without a setting to say so;
+`submit: false` under a channel is the exception that uploads and stops.
+
+Each channel is then held to its own record. App Store Connect has to show the build uploaded,
+attached to the version, and the version waiting for review; Google Play has to show the version
+code in the production track as a completed or in-progress release. A lane that finished happily
+while the store shows otherwise fails the job.
 
 ## The reviewer's comment
 

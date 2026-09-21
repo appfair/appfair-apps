@@ -8,9 +8,3 @@ distribution:
     - google-play-store
   ios-uikit:
     - apple-app-store
-
-# Ask Apple to review the build, rather than leaving it uploaded: the queue then runs the lane
-# that attaches the build to the version and submits it. Release stays manual in App Store
-# Connect. Play keeps its default, which uploads to the internal track as a draft.
-apple-app-store:
-  submit: true

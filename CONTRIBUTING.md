@@ -130,17 +130,23 @@ or taken up with the maintainer.
 
 | channel | target | what it does | settings |
 |---|---|---|---|
-| `apple-app-store` | `ios-uikit` | uploads to App Store Connect | `submit`, `profile-secret` |
-| `google-play-store` | `android-mdc` | uploads to the Play internal track | `submit` |
+| `apple-app-store` | `ios-uikit` | submits the build for App Review | `submit`, `profile-secret` |
+| `google-play-store` | `android-mdc` | submits the build to the production track | `submit` |
 | `altstore`, `f-droid`, `samsung-galaxy-store` | | declared but not yet implemented; a submission naming one is rejected with that message | |
 
-`submit` defaults to `false`, which uploads the build and stops. On the App Store that leaves the
-version in Prepare for Submission with no build attached to it — the binary is there and
-processing, but nothing has asked for review, and App Store Connect shows an empty version. Set
-`submit` to `true` to run the lane that attaches the build and requests App Review, or on Play
-promotes the build to production. After the Apple lane runs, the queue asks App Store Connect what
-happened and fails the job unless the records match: the build uploaded, attached to the version,
-and the version in a reviewing state when the lane submitted one.
+Publishing means submitting. A merged submission asks Apple to review the build and Google to
+review and roll it out to production; neither needs a setting to say so. Releasing on the App
+Store stays manual — an approved version waits for the Release button — and Google's rollout
+starts when review passes.
+
+`submit: false` under a channel is the exception, for a build that should be uploaded and left
+alone: the App Store version then sits in Prepare for Submission with no build attached, and Play
+holds the bundle in the internal track as a draft.
+
+After each lane runs, the queue asks the store what happened and fails the job when the answer
+disagrees: App Store Connect has to show the build uploaded, attached to the version, and the
+version in a reviewing state; Google Play has to show the version code in the production track as
+a completed or in-progress release.
 
 `profile-secret` names a repository secret holding an App Store provisioning profile, for an app
 that needs a particular one. Otherwise the run requests a profile from Apple for the app it is
@@ -258,7 +264,7 @@ that: a release with no notes leaves the reviewer reading commits.
 | the comparison | reproduce the difference, or have a maintainer waive it with the label |
 | the scan | a maintainer will contact you; nothing is published after a scan finds something |
 | the upload | open a [publication problem](https://github.com/appfair/appfair-apps/issues/new?template=publication-problem.yml) with the run link |
-| the confirmation | the lane finished but App Store Connect does not show the submission. A binary already uploaded cannot be sent again under the same build number, so a maintainer finishes it by running the publish workflow with `channel: apple-app-store` and `lane: ios submit` |
+| the confirmation | the lane finished but the store does not show the submission. A binary already uploaded cannot be sent again under the same build number, so a maintainer finishes it by running the publish workflow with `channel: apple-app-store` and `lane: ios submit` |
 
 ## Running the checks yourself
 

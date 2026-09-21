@@ -21,22 +21,26 @@ commit-pattern: '^[0-9a-f]{40}$'
 # The channels an app can be published to. A submission lists its channels under the target that
 # builds for them, and a target can feed more than one channel.
 #
+# Publishing means asking the store to review the build and distribute it. `lane` is what a
+# submission runs, and it is the lane that submits; `hold-lane` is the exception, for a submission
+# that sets `submit: false` and wants the build uploaded and left alone.
+#
 #   target        the Day target whose package this channel takes
-#   lane          the fastlane lane that uploads it
-#   submit-lane   the lane that also asks for review, when a submission sets `submit: true`
+#   lane          the fastlane lane that submits it for review and distribution
+#   hold-lane     the lane that uploads without submitting, for `submit: false`
 #   options       the settings a submission may give this channel
 #   status        `ready`, or `planned` for a declared channel with no implementation yet
 channels:
   apple-app-store:
     target: ios-uikit
-    lane: ios upload
-    submit-lane: ios release
+    lane: ios release
+    hold-lane: ios upload
     options: [submit, profile-secret]
     status: ready
   google-play-store:
     target: android-mdc
-    lane: android upload
-    submit-lane: android release
+    lane: android release
+    hold-lane: android upload
     options: [submit]
     status: ready
   # Declared but not implemented. A submission naming one of these is rejected with that reason.

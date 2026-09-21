@@ -76,7 +76,7 @@ class Channel:
     name: str
     target: str
     lane: str
-    submit_lane: str
+    hold_lane: str
     options: set[str]
     status: str
 
@@ -108,7 +108,7 @@ class Policy:
                 name=name,
                 target=str(spec["target"]),
                 lane=str(spec.get("lane", "")),
-                submit_lane=str(spec.get("submit-lane", spec.get("lane", ""))),
+                hold_lane=str(spec.get("hold-lane", spec.get("lane", ""))),
                 options=set(spec.get("options", [])),
                 status=str(spec.get("status", "planned")),
             )
@@ -476,9 +476,10 @@ def publish_rows(app: App, entry: dict, policy: Policy) -> list[dict]:
                 target=target,
                 runner=runner_for(target, policy),
                 channel=channel.name,
-                # `upload` puts the build on the channel and stops; `submit: true` under the
-                # channel runs the lane that requests review.
-                lane=channel.submit_lane if settings.get("submit") else channel.lane,
+                # Publishing means submitting: the channel's own lane asks for review and
+                # distribution. `submit: false` under the channel is the exception, and runs the
+                # lane that uploads the build and leaves it alone.
+                lane=channel.lane if settings.get("submit", True) else channel.hold_lane,
                 # Empty unless the submission named a secret. The Apple channel requests a
                 # profile during the run from the catalog's App Store Connect key.
                 profile_secret=(
@@ -2060,6 +2061,19 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
         print(f"FAIL policy.yaml names no runner for: {', '.join(missing)}")
     else:
         print("ok   every buildable target names the runner it is built on")
+
+    # Every ready channel needs both lanes: the one that submits, and the one a `submit: false`
+    # submission falls back to.
+    laneless = [
+        name
+        for name, channel in policy.ready_channels.items()
+        if not channel.lane or not channel.hold_lane
+    ]
+    if laneless:
+        failures += 1
+        print(f"FAIL these channels are missing a lane: {', '.join(laneless)}")
+    else:
+        print("ok   every ready channel names the lane it submits with and the one it holds with")
 
     # The paths a flavor build cannot match: the app's own binary carries the display name day
     # compiles into it. They are reported and allowed; anything else still counts.

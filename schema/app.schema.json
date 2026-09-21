@@ -91,7 +91,7 @@
       "properties": {
         "submit": {
           "type": "boolean",
-          "description": "Ask this channel to review or release the build, on top of uploading it. Defaults to false."
+          "description": "Whether this channel is asked to review and distribute the build. Defaults to true, which is what publishing means. Set it to false to upload the build and leave it alone: on the App Store that leaves the version in Prepare for Submission, and on Play it lands in the internal track as a draft."
         },
         "profile-secret": {
           "type": "string",
@@ -107,7 +107,7 @@
       "properties": {
         "submit": {
           "type": "boolean",
-          "description": "Ask this channel to review or release the build, on top of uploading it. Defaults to false."
+          "description": "Whether this channel is asked to review and distribute the build. Defaults to true, which is what publishing means. Set it to false to upload the build and leave it alone: on the App Store that leaves the version in Prepare for Submission, and on Play it lands in the internal track as a draft."
         }
       }
     },
@@ -118,7 +118,7 @@
       "properties": {
         "submit": {
           "type": "boolean",
-          "description": "Ask this channel to review or release the build, on top of uploading it. Defaults to false."
+          "description": "Whether this channel is asked to review and distribute the build. Defaults to true, which is what publishing means. Set it to false to upload the build and leave it alone: on the App Store that leaves the version in Prepare for Submission, and on Play it lands in the internal track as a draft."
         }
       }
     },
@@ -135,7 +135,7 @@
       "properties": {
         "submit": {
           "type": "boolean",
-          "description": "Ask this channel to review or release the build, on top of uploading it. Defaults to false."
+          "description": "Whether this channel is asked to review and distribute the build. Defaults to true, which is what publishing means. Set it to false to upload the build and leave it alone: on the App Store that leaves the version in Prepare for Submission, and on Play it lands in the internal track as a draft."
         }
       }
     }
