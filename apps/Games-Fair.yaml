@@ -1,0 +1,10 @@
+# yaml-language-server: $schema=../schema/app.schema.json
+token: Games-Fair
+title: Games Fair
+tag: v2.0.5
+commit: 9eaa2554e40cbf74b70f684f76aef408e6fb1699
+distribution:
+  android-mdc:
+    - google-play-store
+  ios-uikit:
+    - apple-app-store
