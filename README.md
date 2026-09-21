@@ -86,6 +86,10 @@ generates from the app's listing. Submitting is what publishing means here, so t
 lanes ask Apple for review and Google for a production rollout without a setting to say so;
 `submit: false` under a channel is the exception that uploads and stops.
 
+Before signing, each channel asks its store what it already holds: Play refuses a version code
+twice, and the App Store refuses a version whose record carries a language without What's New or
+screenshots. Both stop the run there, with the remedy named.
+
 Each channel is then held to its own record. App Store Connect has to show the build uploaded,
 attached to the version, and the version waiting for review; Google Play has to show the version
 code in the production track as a completed or in-progress release. A lane that finished happily

@@ -137,6 +137,52 @@ runs:
         ASC_KEY_B64: ${{ inputs.asc-key-b64 }}
       run: python3 scripts/signing_inputs.py
 
+    - name: Read the app's manifest paths from policy.yaml
+      id: paths
+      shell: bash
+      run: |
+        set -euo pipefail
+        python3 - <<'PY' >> "$GITHUB_OUTPUT"
+        import yaml
+        paths = yaml.safe_load(open("policy.yaml"))["app-data-paths"]
+        print("sparse<<EOF")
+        print("\n".join(paths))
+        print("EOF")
+        PY
+
+    - name: Check out the app's listing at ${{ inputs.ref }}
+      uses: actions/checkout@v7
+      with:
+        repository: ${{ inputs.repo }}
+        ref: ${{ inputs.ref }}
+        path: app-data
+        sparse-checkout: ${{ steps.paths.outputs.sparse }}
+        sparse-checkout-cone-mode: false
+        persist-credentials: false
+
+    # What the store already holds decides whether this run can work at all: a version code Play
+    # has seen, or a version App Store Connect will not review, fails here rather than after a
+    # signature and an upload.
+    - name: Ask the store what it already holds
+      shell: bash
+      env:
+        APPFAIR_ASC_KEY_ID: ${{ env.APPFAIR_ASC_KEY_ID }}
+        APPFAIR_ASC_ISSUER: ${{ env.APPFAIR_ASC_ISSUER }}
+        APPFAIR_ASC_KEY_PATH: ${{ env.APPFAIR_ASC_KEY_PATH }}
+        APPFAIR_PLAY_KEY_PATH: ${{ env.APPFAIR_PLAY_KEY_PATH }}
+      run: |
+        set -euo pipefail
+        (cd app-data && "$DAY_BIN" --flavor "${{ inputs.flavor }}" metadata --json) \
+          > submitted-metadata.json 2>/dev/null
+        case "${{ inputs.channel }}" in
+          apple-app-store)
+            python3 scripts/asc_state.py --bundle-id "${{ inputs.app-id }}" \
+              --metadata submitted-metadata.json --target "${{ inputs.target }}" --preflight ;;
+          google-play-store)
+            python3 scripts/play_state.py --metadata submitted-metadata.json \
+              --target "${{ inputs.target }}" --preflight ;;
+        esac
+
     - name: Name the package
       id: pick
       shell: bash
@@ -255,29 +301,6 @@ runs:
           --identity "${{ inputs.apple-identity }}"
 
     # --- The listing, staged from the app's text and images ---------------------------------
-    - name: Read the app's manifest paths from policy.yaml
-      id: paths
-      shell: bash
-      run: |
-        set -euo pipefail
-        python3 - <<'PY' >> "$GITHUB_OUTPUT"
-        import yaml
-        paths = yaml.safe_load(open("policy.yaml"))["app-data-paths"]
-        print("sparse<<EOF")
-        print("\n".join(paths))
-        print("EOF")
-        PY
-
-    - name: Check out the app's listing at ${{ inputs.ref }}
-      uses: actions/checkout@v7
-      with:
-        repository: ${{ inputs.repo }}
-        ref: ${{ inputs.ref }}
-        path: app-data
-        sparse-checkout: ${{ steps.paths.outputs.sparse }}
-        sparse-checkout-cone-mode: false
-        persist-credentials: false
-
     - name: Stage the listing
       shell: bash
       run: |
@@ -319,8 +342,6 @@ runs:
         APPFAIR_PLAY_KEY_PATH: ${{ env.APPFAIR_PLAY_KEY_PATH }}
       run: |
         set -euo pipefail
-        (cd app-data && "$DAY_BIN" --flavor "${{ inputs.flavor }}" metadata --json) \
-          > submitted-metadata.json 2>/dev/null
         # The lane decides which track to look in, and what the release there has to be.
         case "${{ inputs.lane }}" in
           *release) TRACK=production; EXPECT=submitted ;;
@@ -338,8 +359,6 @@ runs:
         APPFAIR_ASC_KEY_PATH: ${{ env.APPFAIR_ASC_KEY_PATH }}
       run: |
         set -euo pipefail
-        (cd app-data && "$DAY_BIN" --flavor "${{ inputs.flavor }}" metadata --json) \
-          > submitted-metadata.json 2>/dev/null
         # A lane that submits has to end with the version submitted; one that only uploads is
         # allowed to leave it in Prepare for Submission, and says so.
         case "${{ inputs.lane }}" in

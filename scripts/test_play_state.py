@@ -1,7 +1,7 @@
 """Cases for judging what Google Play says after a lane has run."""
 import unittest
 
-from play_state import judge
+from play_state import judge, unused_code
 
 
 def track(*releases):
@@ -54,6 +54,28 @@ class JudgeTests(unittest.TestCase):
         ok, _, problems = judge(track(release("halted", 36)), "36", "production", True)
         self.assertFalse(ok)
 
+
+
+class UnusedCodeTests(unittest.TestCase):
+    def test_a_fresh_code_passes(self):
+        ok, lines, problems = unused_code([{"versionCode": 35}], "37", {})
+        self.assertTrue(ok, problems)
+        self.assertTrue(any("35" in line for line in lines), lines)
+
+    def test_the_state_that_refused_this_submission(self):
+        ok, _, problems = unused_code(
+            [{"versionCode": c} for c in (30, 35, 36)],
+            "36",
+            {"internal": track(release("draft", 36))},
+        )
+        self.assertFalse(ok)
+        self.assertTrue(any("already been uploaded" in p for p in problems), problems)
+        self.assertTrue(any("internal track as a draft" in p for p in problems), problems)
+
+    def test_a_used_code_with_no_track_still_blocks(self):
+        ok, _, problems = unused_code([{"versionCode": 36}], "36", {})
+        self.assertFalse(ok)
+        self.assertTrue(any("raise `build`" in p for p in problems), problems)
 
 if __name__ == "__main__":
     unittest.main()

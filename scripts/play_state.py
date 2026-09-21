@@ -74,6 +74,21 @@ def call(token: str, path: str, method: str = "GET") -> dict:
         return {"error": 0, "detail": str(error)}
 
 
+def report(heading: list[str], lines: list[str], problems: list[str]) -> None:
+    """The same story in the run's log and in its summary."""
+    body = heading + [f"- {line}" for line in lines]
+    if problems:
+        body += ["", "**This is not ready to publish:**", ""] + [f"- {p}" for p in problems]
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with open(summary, "a") as handle:
+            handle.write("\n".join(body) + "\n")
+    for line in lines:
+        print(f"         {line}")
+    for problem in problems:
+        print(f"::error::{problem}")
+
+
 def judge(track: dict | None, version_code: str, track_name: str, submitted: bool):
     """Whether the track holds this build, and in the state the lane was supposed to leave it.
 
@@ -112,6 +127,53 @@ def judge(track: dict | None, version_code: str, track_name: str, submitted: boo
     return not problems, lines, problems
 
 
+def unused_code(bundles: list[dict], version_code: str, tracks: dict[str, dict]):
+    """Whether Play will take this version code, and where it already sits if not.
+
+    Play version codes are used once for the whole package, so a release that repeats one is
+    refused at upload with "Version code N has already been used". Pure, so the cases below can
+    be checked without a network.
+    """
+    lines, problems = [], []
+    used = sorted({str(b.get("versionCode")) for b in bundles})
+    lines.append("version codes Play already holds: " + (", ".join(used) if used else "none"))
+    if str(version_code) not in used:
+        return True, lines, problems
+
+    where = [
+        f"the {name} track as a {release.get('status')} release"
+        for name, track in tracks.items()
+        for release in (track.get("releases") or [])
+        if str(version_code) in [str(c) for c in release.get("versionCodes", [])]
+    ]
+    problems.append(
+        f"version code {version_code} has already been uploaded"
+        + (", and sits in " + " and ".join(where) if where else "")
+        + ". Play takes each code once, so raise `build` in the app's flavor manifest and tag "
+        "again"
+    )
+    return False, lines, problems
+
+
+def preflight(token: str, package: str, version_code: str, tracks: tuple = ("production", "internal")):
+    """Read what a submission would run into, before anything is signed or uploaded."""
+    edit = call(token, f"/applications/{package}/edits", method="POST")
+    if "error" in edit:
+        return False, [], [f"Google Play refused an edit for {package}: {edit}"]
+    try:
+        bundles = call(token, f"/applications/{package}/edits/{edit['id']}/bundles")
+        if "error" in bundles:
+            return False, [], [f"Google Play would not list the bundles: {bundles}"]
+        found = {}
+        for name in tracks:
+            track = call(token, f"/applications/{package}/edits/{edit['id']}/tracks/{name}")
+            if "error" not in track:
+                found[name] = track
+    finally:
+        call(token, f"/applications/{package}/edits/{edit['id']}", method="DELETE")
+    return unused_code(bundles.get("bundles", []), version_code, found)
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--package", help="the Play package name, or read it from --metadata")
@@ -119,7 +181,12 @@ def main(argv=None) -> int:
     parser.add_argument("--metadata", help="`day metadata --json`, to take the code from")
     parser.add_argument("--target", default="android-mdc", help="the target `--metadata` resolves")
     parser.add_argument("--track", default="production", help="the track the lane published to")
-    parser.add_argument("--expect", choices=["submitted", "uploaded"], required=True)
+    parser.add_argument("--expect", choices=["submitted", "uploaded"])
+    parser.add_argument(
+        "--preflight",
+        action="store_true",
+        help="ask what a submission would run into, before anything is uploaded",
+    )
     parser.add_argument("--attempts", type=int, default=6, help="Play takes a moment to settle")
     parser.add_argument("--delay", type=int, default=20, help="seconds between attempts")
     args = parser.parse_args(argv)
@@ -142,7 +209,15 @@ def main(argv=None) -> int:
     if not (key_path and Path(key_path).is_file()):
         print("::error::no Play service-account key, so the submission cannot be confirmed")
         return 1
+    if not (args.preflight or args.expect):
+        print("::error::play_state.py needs --expect, or --preflight")
+        return 1
     token = access_token(json.loads(Path(key_path).read_text()))
+
+    if args.preflight:
+        ok, lines, problems = preflight(token, args.package, args.version_code)
+        report(["#### Google Play, before anything is uploaded", ""], lines, problems)
+        return 0 if ok else 1
 
     ok, lines, problems = False, [], ["the track was never read"]
     for attempt in range(1, max(1, args.attempts) + 1):
@@ -165,17 +240,7 @@ def main(argv=None) -> int:
         print(f"         not there yet, asking again in {args.delay}s ({attempt}/{args.attempts})")
         time.sleep(args.delay)
 
-    report = ["#### Google Play, after the lane ran", ""] + [f"- {line}" for line in lines]
-    if problems:
-        report += ["", "**The submission did not finish:**", ""] + [f"- {p}" for p in problems]
-    summary = os.environ.get("GITHUB_STEP_SUMMARY")
-    if summary:
-        with open(summary, "a") as handle:
-            handle.write("\n".join(report) + "\n")
-    for line in lines:
-        print(f"         {line}")
-    for problem in problems:
-        print(f"::error::{problem}")
+    report(["#### Google Play, after the lane ran", ""], lines, problems)
     return 0 if ok else 1
 
 

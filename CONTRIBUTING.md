@@ -143,6 +143,13 @@ starts when review passes.
 alone: the App Store version then sits in Prepare for Submission with no build attached, and Play
 holds the bundle in the internal track as a draft.
 
+Before anything is signed, the queue asks each store what it already holds, and stops there when
+a release cannot land: a Play version code used once is used for good, so a repeated `build` is
+refused before a package is uploaded, and an App Store version is refused while any language on
+the record is missing its What's New or its screenshots. Every language the store record carries
+needs both — the listing in the app's repository has to cover them, or the record has to drop
+them.
+
 After each lane runs, the queue asks the store what happened and fails the job when the answer
 disagrees: App Store Connect has to show the build uploaded, attached to the version, and the
 version in a reviewing state; Google Play has to show the version code in the production track as
@@ -264,6 +271,7 @@ that: a release with no notes leaves the reviewer reading commits.
 | the comparison | reproduce the difference, or have a maintainer waive it with the label |
 | the scan | a maintainer will contact you; nothing is published after a scan finds something |
 | the upload | open a [publication problem](https://github.com/appfair/appfair-apps/issues/new?template=publication-problem.yml) with the run link |
+| the store check before signing | the release cannot land as it stands: Play already has this version code (raise `build` in the flavor and tag again), or the App Store record carries a language the listing does not |
 | the confirmation | the lane finished but the store does not show the submission. A binary already uploaded cannot be sent again under the same build number, so a maintainer finishes it by running the publish workflow with `channel: apple-app-store` and `lane: ios submit` |
 
 ## Running the checks yourself

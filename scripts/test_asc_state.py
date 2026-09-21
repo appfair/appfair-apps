@@ -1,7 +1,7 @@
 """Cases for judging what App Store Connect says after a lane has run."""
 import unittest
 
-from asc_state import judge
+from asc_state import judge, review_ready
 
 
 def version(state, build_id=None, string="2.0.2"):
@@ -57,6 +57,37 @@ class JudgeTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertTrue(any("INVALID" in p for p in problems), problems)
 
+
+
+def localization(locale, notes=True, identifier=None):
+    return {"id": identifier or locale, "attributes": {"locale": locale, "whatsNew": "new" if notes else None}}
+
+
+class ReviewReadyTests(unittest.TestCase):
+    def test_one_language_with_notes_and_screenshots_is_ready(self):
+        ok, _, problems = review_ready([localization("en-US")], {"en-US": ["a set"]}, False)
+        self.assertTrue(ok, problems)
+
+    def test_the_state_that_refused_this_submission(self):
+        # The App Store record carries 13 languages; the app's listing covers one.
+        locales = ["en-US", "de-DE", "ja", "fr-FR"]
+        localizations = [localization(l, notes=(l == "en-US")) for l in locales]
+        ok, _, problems = review_ready(localizations, {"en-US": ["a set"]}, True)
+        self.assertFalse(ok)
+        self.assertTrue(any("What's New" in p and "de-DE" in p for p in problems), problems)
+        self.assertTrue(any("screenshots" in p and "ja" in p for p in problems), problems)
+
+    def test_a_language_without_screenshots_alone_still_blocks(self):
+        ok, _, problems = review_ready(
+            [localization("en-US"), localization("de-DE")], {"en-US": ["a set"], "de-DE": []}, False
+        )
+        self.assertFalse(ok)
+        self.assertEqual(1, len(problems), problems)
+
+    def test_an_already_uploaded_build_is_noted_not_refused(self):
+        ok, lines, _ = review_ready([localization("en-US")], {"en-US": ["a set"]}, True)
+        self.assertTrue(ok)
+        self.assertTrue(any("already in App Store Connect" in line for line in lines), lines)
 
 if __name__ == "__main__":
     unittest.main()

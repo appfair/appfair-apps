@@ -116,6 +116,89 @@ def judge(version: dict | None, builds: list[dict], build_number: str, submitted
     return not problems, lines, problems
 
 
+def review_ready(localizations: list[dict], screenshots: dict[str, list], build_used: bool):
+    """Whether App Store Connect would accept this version for review, and why not.
+
+    Apple refuses a submission with "not in valid state" and leaves the reason in the console.
+    The reasons that reach a queue like this one are a localization the listing does not cover:
+    an update needs What's New in every language the record carries, and each language needs
+    screenshots. Pure, so the cases below can be checked without a network.
+    """
+    lines, problems = [], []
+    missing_notes = sorted(
+        l["attributes"]["locale"] for l in localizations if not l["attributes"].get("whatsNew")
+    )
+    missing_shots = sorted(
+        l["attributes"]["locale"] for l in localizations if not screenshots.get(l["id"])
+    )
+    lines.append(f"the version carries {len(localizations)} localization(s)")
+    if build_used:
+        lines.append("this version and build are already in App Store Connect")
+    if missing_notes:
+        problems.append(
+            "no What's New for " + ", ".join(missing_notes) + ". An update needs it in every "
+            "language the App Store record carries: add those locales to the app's store "
+            "listing, or remove them from the record in App Store Connect"
+        )
+    if missing_shots:
+        problems.append(
+            "no screenshots for " + ", ".join(missing_shots) + ". Every language on the record "
+            "needs a set before Apple will review the version"
+        )
+    return not problems, lines, problems
+
+
+def preflight(token: str, app: str, version_string: str, build_number: str):
+    """Read what a submission would run into, before anything is signed or uploaded."""
+    versions = ask(
+        token,
+        f"/v1/apps/{app}/appStoreVersions?filter[versionString]={version_string}"
+        f"&include=build&limit=1",
+    )
+    version = (versions.get("data") or [None])[0]
+    builds = ask(token, f"/v1/builds?filter[app]={app}&limit=20&sort=-uploadedDate&include=preReleaseVersion")
+    pre = {
+        item["id"]: item["attributes"].get("version")
+        for item in builds.get("included", [])
+        if item["type"] == "preReleaseVersions"
+    }
+    used = False
+    for record in builds.get("data", []):
+        relation = (record.get("relationships", {}).get("preReleaseVersion", {}) or {}).get("data")
+        train = pre.get((relation or {}).get("id"))
+        if str(record["attributes"].get("version")) == str(build_number) and train == version_string:
+            used = True
+    if version is None:
+        return True, [f"App Store Connect has no {version_string} yet, so this run creates it"], []
+
+    localizations = ask(
+        token, f"/v1/appStoreVersions/{version['id']}/appStoreVersionLocalizations?limit=50"
+    ).get("data", [])
+    screenshots = {}
+    for localization in localizations:
+        sets = ask(
+            token,
+            f"/v1/appStoreVersionLocalizations/{localization['id']}/appScreenshotSets?limit=20",
+        )
+        screenshots[localization["id"]] = sets.get("data", [])
+    return review_ready(localizations, screenshots, used)
+
+
+def report(heading: list[str], lines: list[str], problems: list[str]) -> None:
+    """The same story in the run's log and in its summary."""
+    body = heading + [f"- {line}" for line in lines]
+    if problems:
+        body += ["", "**This is not ready to publish:**", ""] + [f"- {p}" for p in problems]
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with open(summary, "a") as handle:
+            handle.write("\n".join(body) + "\n")
+    for line in lines:
+        print(f"         {line}")
+    for problem in problems:
+        print(f"::error::{problem}")
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--bundle-id", required=True)
@@ -126,8 +209,12 @@ def main(argv=None) -> int:
     parser.add_argument(
         "--expect",
         choices=["submitted", "uploaded"],
-        required=True,
         help="what the lane that just ran was supposed to achieve",
+    )
+    parser.add_argument(
+        "--preflight",
+        action="store_true",
+        help="ask what a submission would run into, before anything is uploaded",
     )
     parser.add_argument(
         "--attempts",
@@ -155,12 +242,21 @@ def main(argv=None) -> int:
         print("::error::no App Store Connect key, so the submission cannot be confirmed")
         return 1
 
+    if not (args.preflight or args.expect):
+        print("::error::asc_state.py needs --expect, or --preflight")
+        return 1
+
     token = jwt(key_id, issuer, Path(key_path).read_text())
     apps = ask(token, f"/v1/apps?filter[bundleId]={args.bundle_id}")
     if "error" in apps or not apps.get("data"):
         print(f"::error::App Store Connect does not know {args.bundle_id}: {apps}")
         return 1
     app = apps["data"][0]["id"]
+
+    if args.preflight:
+        ok, lines, problems = preflight(token, app, args.version, args.build)
+        report(["#### App Store Connect, before anything is uploaded", ""], lines, problems)
+        return 0 if ok else 1
 
     for attempt in range(1, max(1, args.attempts) + 1):
         versions = ask(
@@ -178,18 +274,7 @@ def main(argv=None) -> int:
         print(f"         not there yet, asking again in {args.delay}s ({attempt}/{args.attempts})")
         time.sleep(args.delay)
 
-    report = [f"#### App Store Connect, after the lane ran", ""]
-    report += [f"- {line}" for line in lines]
-    if problems:
-        report += ["", "**The submission did not finish:**", ""] + [f"- {p}" for p in problems]
-    summary = os.environ.get("GITHUB_STEP_SUMMARY")
-    if summary:
-        with open(summary, "a") as handle:
-            handle.write("\n".join(report) + "\n")
-    for line in lines:
-        print(f"         {line}")
-    for problem in problems:
-        print(f"::error::{problem}")
+    report(["#### App Store Connect, after the lane ran", ""], lines, problems)
     return 0 if ok else 1
 
 
