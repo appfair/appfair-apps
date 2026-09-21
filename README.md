@@ -82,7 +82,10 @@ complete.
 
 **Stage C** requests the app's App Store profile from Apple, signs with `day sign apply`, which
 re-signs a package without rebuilding it, and uploads through the fastlane lanes `day store stage`
-generates from the app's listing.
+generates from the app's listing. It then asks App Store Connect what the records say and fails
+when they disagree with what the run claimed: an upload leaves the version in Prepare for
+Submission with no build attached, and a lane that submits has to end with this build attached and
+the version waiting for review.
 
 ## The reviewer's comment
 

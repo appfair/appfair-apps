@@ -29,6 +29,13 @@ on:
           channel the submission names, which is what a merge does.
         required: false
         type: string
+      lane:
+        description: >-
+          Run this fastlane lane instead of the channel's own, with `channel`. `ios submit`
+          attaches a binary App Store Connect already has and submits it, where the usual lane
+          would upload the same build number again and be refused.
+        required: false
+        type: string
       allow-mismatch:
         description: Accept differences from the maintainer's release for this run.
         required: false
@@ -59,7 +66,8 @@ jobs:
           set -euo pipefail
           if [ -n "${{ inputs.app }}" ]; then
             python3 scripts/queue.py plan --app "${{ inputs.app }}" \
-              ${{ inputs.channel && format('--channel {0}', inputs.channel) || '' }}
+              ${{ inputs.channel && format('--channel {0}', inputs.channel) || '' }} \
+              ${{ inputs.lane && format('--lane "{0}"', inputs.lane) || '' }}
           else
             python3 scripts/queue.py plan --changed-from "${{ github.event.before }}"
           fi

@@ -529,6 +529,14 @@ def cmd_plan(args: argparse.Namespace) -> int:
             return 1
         wanted = {row["target"] for row in publishes}
         builds = [row for row in builds if row["target"] in wanted]
+    # A named lane, for a release that needs finishing rather than repeating: `ios submit`
+    # attaches a binary App Store Connect already has, where `ios release` would upload it again
+    # and Apple refuses a build number twice.
+    if args.lane:
+        if len(publishes) != 1:
+            Problem("plan", "--lane needs one channel, so name --channel with it").emit()
+            return 1
+        publishes = [dict(row, lane=args.lane) for row in publishes]
 
     build_matrix = json.dumps({"include": builds}, separators=(",", ":"))
     publish_matrix = json.dumps({"include": publishes}, separators=(",", ":"))
@@ -2163,6 +2171,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--changed", nargs="*", help="explicit changed paths, in place of a git diff")
     p.add_argument("--app", help="one token, in place of a git diff")
     p.add_argument("--channel", help="publish to this channel alone, for a re-run")
+    p.add_argument("--lane", help="run this fastlane lane instead of the channel's, with --channel")
     p.set_defaults(func=cmd_plan)
 
     p = sub.add_parser("review", help="summarize the source changes a submission proposes")

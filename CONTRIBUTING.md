@@ -134,8 +134,13 @@ or taken up with the maintainer.
 | `google-play-store` | `android-mdc` | uploads to the Play internal track | `submit` |
 | `altstore`, `f-droid`, `samsung-galaxy-store` | | declared but not yet implemented; a submission naming one is rejected with that message | |
 
-`submit` defaults to `false`, which uploads the build and stops. Set it to `true` to run the lane
-that requests App Review, or on Play promotes the build to production.
+`submit` defaults to `false`, which uploads the build and stops. On the App Store that leaves the
+version in Prepare for Submission with no build attached to it — the binary is there and
+processing, but nothing has asked for review, and App Store Connect shows an empty version. Set
+`submit` to `true` to run the lane that attaches the build and requests App Review, or on Play
+promotes the build to production. After the Apple lane runs, the queue asks App Store Connect what
+happened and fails the job unless the records match: the build uploaded, attached to the version,
+and the version in a reviewing state when the lane submitted one.
 
 `profile-secret` names a repository secret holding an App Store provisioning profile, for an app
 that needs a particular one. Otherwise the run requests a profile from Apple for the app it is
@@ -253,6 +258,7 @@ that: a release with no notes leaves the reviewer reading commits.
 | the comparison | reproduce the difference, or have a maintainer waive it with the label |
 | the scan | a maintainer will contact you; nothing is published after a scan finds something |
 | the upload | open a [publication problem](https://github.com/appfair/appfair-apps/issues/new?template=publication-problem.yml) with the run link |
+| the confirmation | the lane finished but App Store Connect does not show the submission. A binary already uploaded cannot be sent again under the same build number, so a maintainer finishes it by running the publish workflow with `channel: apple-app-store` and `lane: ios submit` |
 
 ## Running the checks yourself
 

@@ -108,16 +108,20 @@ runs:
 
     # The steps below read policy.yaml with PyYAML. Ubuntu runners ship a python3 that has it;
     # macOS runners do not, and the first `import yaml` is where the job would otherwise stop.
-    - name: PyYAML for the queue's scripts
+    - name: The python packages the queue's scripts need
       shell: bash
       run: |
         set -euo pipefail
-        if ! python3 -c "import yaml" 2>/dev/null; then
+        # PyYAML reads policy.yaml; cryptography signs the App Store Connect token the
+        # confirmation below asks with. Ubuntu runners have the first, macOS runners neither.
+        for module in yaml cryptography; do
+          python3 -c "import $module" 2>/dev/null && continue
+          package=$([ "$module" = yaml ] && echo pyyaml || echo cryptography)
           # --break-system-packages for a Homebrew python that marks itself externally managed.
-          pip3 install --quiet --disable-pip-version-check pyyaml \
-            || pip3 install --quiet --disable-pip-version-check --break-system-packages pyyaml
-        fi
-        python3 -c "import sys, yaml; print('PyYAML', yaml.__version__, 'on python', sys.version.split()[0])"
+          pip3 install --quiet --disable-pip-version-check "$package" \
+            || pip3 install --quiet --disable-pip-version-check --break-system-packages "$package"
+        done
+        python3 -c "import sys, yaml, cryptography; print('python', sys.version.split()[0], '| PyYAML', yaml.__version__, '| cryptography', cryptography.__version__)"
 
     - name: Normalize the signing inputs
       shell: bash
@@ -304,7 +308,32 @@ runs:
         command -v fastlane >/dev/null || sudo gem install fastlane --no-document
         fastlane "${lane[@]}"
 
+    # An upload and a submission are not the same thing: `deliver` finishes happily having sent a
+    # binary, while the version it belongs to can still be sitting in Prepare for Submission with
+    # nothing attached. Ask App Store Connect what the records say, and fail when they do not say
+    # what this run claimed.
+    - name: Confirm the submission with App Store Connect
+      if: inputs.channel == 'apple-app-store'
+      shell: bash
+      env:
+        APPFAIR_ASC_KEY_ID: ${{ env.APPFAIR_ASC_KEY_ID }}
+        APPFAIR_ASC_ISSUER: ${{ env.APPFAIR_ASC_ISSUER }}
+        APPFAIR_ASC_KEY_PATH: ${{ env.APPFAIR_ASC_KEY_PATH }}
+      run: |
+        set -euo pipefail
+        (cd app-data && "$DAY_BIN" --flavor "${{ inputs.flavor }}" metadata --json) \
+          > submitted-metadata.json 2>/dev/null
+        # A lane that submits has to end with the version submitted; one that only uploads is
+        # allowed to leave it in Prepare for Submission, and says so.
+        case "${{ inputs.lane }}" in
+          *release|*submit) EXPECT=submitted ;;
+          *) EXPECT=uploaded ;;
+        esac
+        python3 scripts/asc_state.py --bundle-id "${{ inputs.app-id }}" \
+          --metadata submitted-metadata.json --target "${{ inputs.target }}" --expect "$EXPECT"
+
     - name: Keep the signed package
+      if: always()
       uses: actions/upload-artifact@v7
       with:
         name: published-${{ inputs.token }}-${{ inputs.channel }}
