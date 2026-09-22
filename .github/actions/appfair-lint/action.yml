@@ -6,8 +6,9 @@
 # scripts/test_appfair_lint.py covers them.
 name: App Fair lint
 description: >-
-  Check an app against the App Fair's rules: the licence texts, the licence notice in each source
-  file, and the flavor manifest holding the ids it publishes under.
+  Check an app against the App Fair's rules: the licence texts (against the app template's own),
+  the licence notice in each source file, and the flavor manifest holding the ids it publishes
+  under.
 
 inputs:
   path:
@@ -18,6 +19,11 @@ inputs:
     description: The build flavor whose manifest carries the App Fair identity.
     required: false
     default: appfair
+  template:
+    description: >-
+      The App Fair app template the licence texts are compared against, owner/repo@ref.
+    required: false
+    default: appfair/day-appfair@main
   only:
     description: Run only these rules, comma-separated. Empty runs them all.
     required: false
@@ -36,6 +42,7 @@ runs:
         # Through the environment, not interpolated, so a caller's value cannot join the command.
         LINT_PATH: ${{ inputs.path }}
         LINT_FLAVOR: ${{ inputs.flavor }}
+        LINT_TEMPLATE: ${{ inputs.template }}
         LINT_ONLY: ${{ inputs.only }}
         LINT_SKIP: ${{ inputs.skip }}
       run: |
@@ -43,5 +50,6 @@ runs:
         python3 "$GITHUB_ACTION_PATH/appfair_lint.py" \
           --path "$LINT_PATH" \
           --flavor "$LINT_FLAVOR" \
+          --template "$LINT_TEMPLATE" \
           --only "$LINT_ONLY" \
           --skip "$LINT_SKIP"

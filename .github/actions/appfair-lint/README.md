@@ -18,6 +18,7 @@ jobs:
 |---|---|---|
 | `path` | `.` | The project directory, the one holding `Day.toml`. |
 | `flavor` | `appfair` | The build flavor whose manifest carries the identity the catalog publishes the app under. |
+| `template` | `appfair/day-appfair@main` | The App Fair app template the licence texts are compared against, `owner/repo@ref`. |
 | `only` | (all) | Run only these rules, comma-separated. |
 | `skip` | (none) | Run every rule but these, comma-separated. |
 
@@ -29,12 +30,26 @@ jobs:
 |---|---|
 | `day-project` | The directory holds a `Day.toml`, so there is a Day project to check. |
 | `flavor-manifest` | `Day-appfair.toml` is there, which is where the ids the App Fair publishes under live. |
-| `license` | `LICENSE.txt` is the GNU AGPL 3.0 text, compared line by line against the copy in `reference/`. |
-| `license-exception` | `LICENSE-EXCEPTIONS.txt` is the App Fair Distribution Exception, the same way. |
+| `license` | `LICENSE.txt` matches the app template's, character for character. |
+| `license-exception` | `LICENSE-EXCEPTIONS.txt` matches the app template's, the same way. |
+| `app-ids` | The id each platform builds under is one that platform accepts. Android and HarmonyOS read it as a Java package name, so a hyphen there needs an `[app.android]` / `[app.harmony]` override. |
 | `spdx-headers` | Every `.rs` file names its licence in its first five lines. |
 
 A failure names the file, the line, what is wrong and the text that fixes it, and annotates the
 file in Actions. Every rule runs, so one push reports every problem.
+
+## The licence texts
+
+The two licence rules read
+[LICENSE.txt](https://github.com/appfair/day-appfair/blob/main/LICENSE.txt) and
+[LICENSE-EXCEPTIONS.txt](https://github.com/appfair/day-appfair/blob/main/LICENSE-EXCEPTIONS.txt)
+from the app template over HTTPS and compare them character for character, so the text an app is
+scaffolded with is the text it is held to.
+
+`reference/` holds a copy of each, used when the template cannot be reached, which keeps a
+network failure from becoming an app's lint failure. The run says so when it happens, and
+`appfair_lint.py --check-template` compares the copies with the template; this repository's
+checks run it, daily among other times.
 
 ## Adding a rule
 
@@ -53,5 +68,5 @@ def store_listing(project: Project) -> Iterable[Finding]:
 ```
 
 `Project` gives the root, the flavor name, `sources(".rs")` for a walk that skips build output,
-and `reference/` for material to compare against. Cover the rule in
+and `template` for the app template's own files. Cover the rule in
 `scripts/test_appfair_lint.py`, which this repository's checks run.
