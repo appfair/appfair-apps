@@ -109,6 +109,34 @@ jobs:
           print("allow=" + ("true" if override in labels else "false"))
           PY
 
+  # The app's repository against the rules every app here follows: the licence texts, the licence
+  # notice in each source file, and the flavor manifest carrying the identity it publishes under.
+  # The same action an app runs in its own CI (.github/actions/appfair-lint), so a maintainer who
+  # runs it there meets nothing new here. A full checkout, since the rules read the sources.
+  lint:
+    name: lint ${{ matrix.token }}
+    needs: plan
+    if: needs.plan.outputs.count != '0'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check out ${{ matrix.repo }} at ${{ matrix.commit }}
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ matrix.repo }}
+          ref: ${{ matrix.commit }}
+          path: app
+          persist-credentials: false
+      - uses: ./.github/actions/appfair-lint
+        with:
+          path: app
+          flavor: ${{ matrix.flavor }}
+
   # Whether the app at that commit is the app the file claims. Only the app's manifest can say,
   # so this job reads it through a sparse checkout that leaves the source behind.
   verify:
@@ -184,7 +212,7 @@ jobs:
   # produces is files.
   build:
     name: build ${{ matrix.token }} ${{ matrix.target }}
-    needs: [plan, verify]
+    needs: [plan, lint, verify]
     if: needs.plan.outputs.count != '0'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90

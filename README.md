@@ -166,6 +166,20 @@ by the checks instead of at the store. Two submissions may not publish under one
 here: the queue builds, lints, validates and signs every stage through that flavor when the file
 is there, so those are the ids the checks read and the stores receive.
 
+## Running the catalog's rules in an app's own CI
+
+The licence texts, the licence notice in every source file, and the flavor manifest are checked
+by [`appfair-lint`](.github/actions/appfair-lint), an action this repository publishes. A pull
+request here runs it against the submitted commit, and an app runs the same rules on every push:
+
+```yaml
+- uses: actions/checkout@v7
+- uses: appfair/appfair-apps/.github/actions/appfair-lint@main
+```
+
+Each finding names the file, the line, what is wrong and the text that fixes it. The rules and
+how to add one are in [the action's README](.github/actions/appfair-lint/README.md).
+
 ## Submitting
 
 [CONTRIBUTING.md](CONTRIBUTING.md) documents every key in the file and every rule applied to it.

@@ -194,18 +194,22 @@ A pull request runs the stages a merge runs, stopping before the signing.
    checked too.
 2. **The file**: the shape above, the tag pattern, the channels and their targets, and the
    uniqueness of the title and of the ids across the catalog.
-3. **The app against the file**: the pinned commit's manifest, read through a sparse checkout that
+3. **The app's repository** (`appfair-lint`): `LICENSE.txt` is the AGPL text, `LICENSE-EXCEPTIONS.txt`
+   the distribution exception, every Rust source names the licence it is under, and
+   `Day-appfair.toml` carries the identity the catalog publishes. Run it yourself with
+   `uses: appfair/appfair-apps/.github/actions/appfair-lint@main`, and nothing here is a surprise.
+4. **The app against the file**: the pinned commit's manifest, read through a sparse checkout that
    excludes the source. `day metadata --json` must report the version the tag names and the
    targets the file asks for, the tag must still point at the pinned commit, and the id it builds
    has to match an `id` pin when the file states one.
-4. **The reviewer's comment**: for an update, the range between the commit already published and
+5. **The reviewer's comment**: for an update, the range between the commit already published and
    the one this pull request proposes, with the number of commits and files, the build and
    packaging files inside it, and a link to read it on GitHub. A first submission gets a link to
    the source at its commit. The comment is rewritten on every push.
-5. **The build** (stage A): `day lint`, then `day pack --no-sign` for each target. This is the only
+6. **The build** (stage A): `day lint`, then `day pack --no-sign` for each target. This is the only
    stage that runs code from the app, and it holds no credentials, so a pull request cannot
    publish anything or reach a key.
-6. **The validation** (stage B), on a runner that never saw the app's source:
+7. **The validation** (stage B), on a runner that never saw the app's source:
 
    | check | what fails it |
    |---|---|
