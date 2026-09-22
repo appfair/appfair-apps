@@ -1,11 +1,15 @@
 # This repository's own checks: the rules, the submissions, the workflows and the action calls.
-# Runs on every change here, including changes to the rules themselves.
+# Runs on every change here but a submission, including changes to the rules themselves.
 name: checks
 
 on:
   push:
     branches: [main]
   pull_request:
+    # A submission changes apps/ alone, and pr.yml checks those: it runs the selftest and
+    # validates every file before it plans the build. Nothing here reads a submission.
+    paths-ignore:
+      - apps/**
   schedule:
     # Daily: the actions these workflows call live in another repository and change under them.
     - cron: "40 5 * * *"
