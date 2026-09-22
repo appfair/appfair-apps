@@ -17,7 +17,9 @@ inputs:
     description: The Day target to build, such as ios-uikit or android-mdc.
     required: true
   flavor:
-    description: The Day build flavor carrying the App Fair identity.
+    description: >-
+      The Day build flavor carrying the App Fair identity, used when the app carries its
+      manifest. An app that publishes under its own identity needs no flavor.
     required: false
     default: appfair
   day-version:
@@ -39,6 +41,26 @@ runs:
         ref: ${{ inputs.ref }}
         path: app
         persist-credentials: false
+
+    - name: Which flavor this app builds
+      id: flavor
+      shell: bash
+      env:
+        FLAVOR: ${{ inputs.flavor }}
+      run: |
+        set -euo pipefail
+        # The catalog names a flavor; carrying one is the app's choice. A flavor keeps the
+        # maintainer's own builds under the maintainer's own id, and an app whose Day.toml
+        # already states the identity it publishes under needs none. Without `Day-<flavor>.toml`
+        # the project builds exactly as it stands, which also means the two builds the
+        # comparison holds against each other have nothing to differ about.
+        if [ -n "$FLAVOR" ] && [ -f "app/Day-$FLAVOR.toml" ]; then
+          echo "args=--flavor $FLAVOR" >> "$GITHUB_OUTPUT"
+          echo "building the $FLAVOR flavor"
+        else
+          echo "args=" >> "$GITHUB_OUTPUT"
+          echo "building ${{ inputs.repo }} as it stands${FLAVOR:+ (it carries no Day-$FLAVOR.toml)}"
+        fi
 
     - name: The Rust targets ${{ inputs.target }} needs
       id: rust
@@ -69,11 +91,13 @@ runs:
     - name: Lint the project
       working-directory: app
       shell: bash
+      env:
+        FLAVOR_ARGS: ${{ steps.flavor.outputs.args }}
       run: |
         set -euo pipefail
         # `day lint` checks ids, strings, the manifest and the store listing, the same as the
         # app's own CI.
-        "$DAY_BIN" --flavor "${{ inputs.flavor }}" lint
+        "$DAY_BIN" $FLAVOR_ARGS lint
 
     - name: Pack ${{ inputs.target }}, unsigned
       working-directory: app
@@ -81,11 +105,12 @@ runs:
       env:
         DAY_VERBOSE: "1"
         DAY_ANDROID_ABI: arm64-v8a,x86_64
+        FLAVOR_ARGS: ${{ steps.flavor.outputs.args }}
       run: |
         set -euo pipefail
         # `--no-sign` leaves the package unsigned. The App Fair's identity is applied in stage C,
         # which does not run the app's code, and this job holds no keys.
-        "$DAY_BIN" --flavor "${{ inputs.flavor }}" pack \
+        "$DAY_BIN" $FLAVOR_ARGS pack \
           -p "${{ inputs.target }}" --no-sign --no-version-in-name --format json | tee "$RUNNER_TEMP/pack-${{ inputs.target }}.json"
 
     - name: Collect the packages

@@ -59,11 +59,11 @@ complete.
 
 - **Contents.** Every file, with its size and SHA-256, recorded in the run and kept as a report.
 - **Identity.** The bundle id, version and build number from the package's manifest, against the
-  app's `Day.toml` and its App Fair flavor.
+  app's `Day.toml` and, when it carries one, its App Fair flavor.
 - **Permissions.** Every permission in the package, against the app's declared permissions mapped
   through day's catalogue, plus the baseline the framework adds.
-- **Comparison with the app's own release.** The App Fair builds the flavor; the app's CI
-  publishes the base app. The comparison normalizes each side's declared package id, version and
+- **Comparison with the app's own release.** The App Fair builds the app itself, through its
+  flavor when it carries one; the app's CI publishes the base app. The comparison normalizes each side's declared package id, version and
   build, display name, URL scheme, bundle and executable names, and package-qualified authorities
   and permissions. Day's launcher icons, signing records and Android debug-symbol sidecars are
   excluded. Resource tables and iOS asset catalogs are decoded, so other resources, permissions,
@@ -75,8 +75,9 @@ complete.
   NDK), each differing path, and for a property list the keys that disagree with both values.
   Both builds run on the runner image `policy.yaml: runners` names, since a different Xcode
   produces a different `Info.plist` and binary from the same source. Missing or ambiguous base assets,
-  unreadable metadata and an identity that disagrees with the manifest always fail, and a flavor
-  package is never substituted for the base release.
+  unreadable metadata and an identity that disagrees with the manifest always fail, and the App
+  Fair's own package is never substituted for the base release. An app with no flavor is built
+  exactly as its maintainer released it, so the two sides have nothing to differ about.
 - **Safety.** ClamAV over every file, and the provenance and SBOM beside the package checked
   against the commit the submission pins. A build from a dirty checkout is refused.
 
@@ -131,15 +132,14 @@ submission.
 
 ## What each side supplies
 
-**The maintainer** supplies a public Day project with a release tag, an App Fair flavor carrying
-the canonical bundle id and a build number above what the stores already have, a store listing in
-`store-appfair/`, and an app that meets the
+**The maintainer** supplies a public Day project with a release tag, the canonical bundle id and a
+build number above what the stores already have, a store listing, and an app that meets the
 [inclusion criteria](https://appfair.org/docs/inclusion-criteria/). The base release used for the
-comparison comes from the app's own CI, so its existing release workflow is enough and the flavor's
-packages never have to be published. The queue derives the base artifact name from the unflavored
-manifest at the pinned commit, including Day's unsigned-IPA suffix. The tag names the version
-being published, so `v2.0.2` publishes 2.0.2 on both stores; a flavor that states a `version` of
-its own is rejected unless the tag agrees with it.
+comparison comes from the app's own CI, so its existing release workflow is enough and the App
+Fair's own packages never have to be published. The queue derives the base artifact name from the
+unflavored manifest at the pinned commit, including Day's unsigned-IPA suffix. The tag names the
+version being published, so `v2.0.2` publishes 2.0.2 on both stores; a flavor that states a
+`version` of its own is rejected unless the tag agrees with it.
 
 **The App Fair** supplies the developer accounts, the signing material, the review, and this
 repository. Its secrets live in the publish workflow's `store` environment and are reachable only
@@ -147,11 +147,16 @@ from the signing job, so a pull request opened from a fork cannot get at them.
 
 Apps are published under `org.appfair.app.<token>` on iOS and `org.appfair.app.<token with
 hyphens as underscores>` on Google Play
-([background](https://appfair.org/docs/building/#bundle-id)). An app carries that identity in a
-[Day build flavor](https://daybrite.dev/docs/flavors), a `Day-appfair.toml` beside its `Day.toml`,
-which leaves the maintainer's own builds under the maintainer's own id. The flavor is named after
-this repository, so a fork called `gamesfair-apps` builds each app's `gamesfair` flavor without
-any edit.
+([background](https://appfair.org/docs/building/#bundle-id)). An app whose own builds go out
+under the maintainer's id carries the App Fair's in a
+[Day build flavor](https://daybrite.dev/docs/flavors), a `Day-appfair.toml` beside its `Day.toml`;
+one whose `Day.toml` already states the App Fair id needs no flavor, and the queue then builds the
+project as it stands. The flavor is named after this repository, so a fork called
+`gamesfair-apps` builds each app's `gamesfair` flavor without any edit.
+
+An app that was renamed keeps the id it already publishes under by stating `id:` in its
+submission — the stores key a record by the id it was created with, so following the new token
+would abandon the listing. The id stays inside `org.appfair.app.`, and no two apps may claim one.
 
 ## Submitting
 
@@ -160,8 +165,8 @@ The short version:
 
 1. If the app is new to the catalog, propose it in a
    [discussion](https://github.com/orgs/appfair/discussions) first.
-2. Tag a release of the app. The tag names the version published, and the flavor's build number
-   has to climb past what the stores already have.
+2. Tag a release of the app. The tag names the version published, and the build number has to
+   climb past what the stores already have.
 3. Write the metadata file and open a pull request:
 
    ```sh
@@ -202,8 +207,9 @@ python3 scripts/queue.py audit --app Faire-Games --report report.json \
   --metadata metadata.json --target android-mdc --sidecars . --expect-commit <sha>
 ```
 
-`metadata.json` is `day --flavor appfair metadata --json` and `base-metadata.json` is
-`day metadata --json`, both from a checkout of the app's manifest paths.
+`metadata.json` is `day --flavor appfair metadata --json` for an app that carries
+`Day-appfair.toml` and plain `day metadata --json` for one that does not; `base-metadata.json` is
+always the unflavored read. Both come from a checkout of the app's manifest paths.
 
 ## Repository secrets
 

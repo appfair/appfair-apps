@@ -24,7 +24,9 @@ inputs:
       declares. The signing follows the target; the upload follows the channel.
     required: true
   flavor:
-    description: The Day build flavor the submission names.
+    description: >-
+      The Day build flavor the catalog names, used when the app carries its manifest. An app
+      that publishes under its own identity needs no flavor.
     required: false
     default: appfair
   packages:
@@ -163,16 +165,33 @@ runs:
     # What the store already holds decides whether this run can work at all: a version code Play
     # has seen, or a version App Store Connect will not review, fails here rather than after a
     # signature and an upload.
+    - name: Which flavor this app builds
+      id: flavor
+      shell: bash
+      env:
+        FLAVOR: ${{ inputs.flavor }}
+      run: |
+        set -euo pipefail
+        # Carrying a flavor is the app's choice: without `Day-<flavor>.toml` the manifest is
+        # read as it stands, which is the identity the app publishes under.
+        if [ -n "$FLAVOR" ] && [ -f "app-data/Day-$FLAVOR.toml" ]; then
+          echo "args=--flavor $FLAVOR" >> "$GITHUB_OUTPUT"
+        else
+          echo "args=" >> "$GITHUB_OUTPUT"
+          echo "reading ${{ inputs.repo }}'s manifest as it stands${FLAVOR:+ (it carries no Day-$FLAVOR.toml)}"
+        fi
+
     - name: Ask the store what it already holds
       shell: bash
       env:
+        FLAVOR_ARGS: ${{ steps.flavor.outputs.args }}
         APPFAIR_ASC_KEY_ID: ${{ env.APPFAIR_ASC_KEY_ID }}
         APPFAIR_ASC_ISSUER: ${{ env.APPFAIR_ASC_ISSUER }}
         APPFAIR_ASC_KEY_PATH: ${{ env.APPFAIR_ASC_KEY_PATH }}
         APPFAIR_PLAY_KEY_PATH: ${{ env.APPFAIR_PLAY_KEY_PATH }}
       run: |
         set -euo pipefail
-        (cd app-data && "$DAY_BIN" --flavor "${{ inputs.flavor }}" metadata --json) \
+        (cd app-data && "$DAY_BIN" $FLAVOR_ARGS metadata --json) \
           > submitted-metadata.json 2>/dev/null
         case "${{ inputs.channel }}" in
           apple-app-store)
@@ -303,11 +322,13 @@ runs:
     # --- The listing, staged from the app's text and images ---------------------------------
     - name: Stage the listing
       shell: bash
+      env:
+        FLAVOR_ARGS: ${{ steps.flavor.outputs.args }}
       run: |
         set -euo pipefail
         # `day store stage` generates the fastlane tree from the listing's text files. The
         # Fastfile comes from day; the app supplies the copy and the screenshots.
-        (cd app-data && "$DAY_BIN" --flavor "${{ inputs.flavor }}" store stage)
+        (cd app-data && "$DAY_BIN" $FLAVOR_ARGS store stage)
         find app-data/build/day/store -maxdepth 3 -type d | head -20
 
     - name: Upload to ${{ inputs.channel }} (${{ inputs.lane }})

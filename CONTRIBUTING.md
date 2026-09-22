@@ -13,16 +13,19 @@ go straight to a pull request.
 ## What the app needs
 
 Every app is published as `org.appfair.app.<token>`, where the token is the app's GitHub
-organization and repository name. The maintainer's own builds keep the maintainer's identity; the
-App Fair build uses the catalog's. In a Day project that separation is a
-[build flavor](https://daybrite.dev/docs/flavors): a `Day-appfair.toml` beside `Day.toml`.
+organization and repository name.
 
-The flavor is named after this repository, so every app here carries `Day-appfair.toml` and a
-submission does not choose the name. A fork called `gamesfair-apps` would build each app's
-`gamesfair` flavor with no other change.
+Where the maintainer's own builds go out under the maintainer's identity, the App Fair's identity
+lives in a [build flavor](https://daybrite.dev/docs/flavors): a `Day-appfair.toml` beside
+`Day.toml`, which leaves `Day.toml` alone. An app written for the App Fair states that identity
+in `Day.toml` itself and carries no flavor; the queue then builds the project as it stands, and
+the two builds the comparison holds against each other have nothing to differ about.
+
+The flavor is named after this repository, so a submission does not choose the name. A fork
+called `gamesfair-apps` would build each app's `gamesfair` flavor with no other change.
 
 ```toml
-# Day-appfair.toml, in the app's repository
+# Day-appfair.toml, in the app's repository — for an app that keeps its own identity in Day.toml
 store = "store-appfair"
 resources = "resource-appfair"   # optional: the icon the catalog build ships
 
@@ -53,22 +56,23 @@ The signing tables hold environment references, filled on the queue's runners fr
 secrets, so nothing secret is committed to the app.
 
 The store listing — name, description, keywords, screenshots, release notes, icon — is the app's
-`store-appfair/` directory and its `resource-appfair/` overlay. The queue reads them at the
-submitted commit and does not modify them.
+`store-appfair/` directory and its `resource-appfair/` overlay, or plain `store/` and `resource/`
+for an app with no flavor. The queue reads them at the submitted commit and does not modify them.
 
-The tag names the version. `v2.0.2` publishes 2.0.2, so the flavor takes the source version and
+The tag names the version. `v2.0.2` publishes 2.0.2, so a flavor takes the source version and
 states no `version` of its own; a flavor that does is accepted only when the tag agrees with it.
 
-The flavor's `build` is its own, because the store counts builds per app and the App Fair's record
-has a history the source repository does not. Raise it before cutting the tag: both stores order
-releases by the version and the build, and reject anything that repeats or lowers them.
+The `build` is the store's counter rather than the source's, because the store counts builds per
+app and the App Fair's record has a history the source repository does not. Raise it before
+cutting the tag: both stores order releases by the version and the build, and reject anything that
+repeats or lowers them.
 
 The tag also needs a release carrying the packages the app's own CI built: an `.aab` for Android,
 an `.ipa` for iOS. These are the **base app's** packages, so the app's existing release workflow
-is enough and the flavor's packages never have to be published. The comparison covers resources,
-components and DEX while normalizing identities and launcher icons and allowing the app's own
-binary to differ, and the flavor's package id, version, permissions and provenance are checked
-against its own manifest.
+is enough and the App Fair's own packages never have to be published. The comparison covers
+resources, components and DEX while normalizing identities and launcher icons and allowing the
+app's own binary to differ, and the submitted package's id, version, permissions and provenance
+are checked against the manifest it was built from.
 
 An app built with the shared Day workflow already publishes the base packages.
 
@@ -80,6 +84,7 @@ title: Fair Games                                  # required
 tag: v2.0.1                                        # required
 commit: 549bac3f78ce937146b56a7acecc35cb361175e3   # required
 summary: Classic puzzle and arcade games, offline. # optional
+id: org.appfair.app.Faire-Games                    # optional, for an app that was renamed
 
 distribution:                                      # required
   ios-uikit:
@@ -109,10 +114,12 @@ two lines.
 | `tag` | The released tag, `vX.Y.Z`. It names the version published, so the app at that commit has to build `X.Y.Z`. The release assets hang off it. |
 | `commit` | What that tag points at, in full and in lower case. Every stage checks this out. |
 | `summary` | One line for people reading the catalog. The store listing is the app's own. |
+| `id` | The bundle id this app publishes under, when it is not `org.appfair.app.<token>`. A renamed app states the id its store records were created under, since a store keys a record by its id and following the new token would abandon the listing. It stays inside `org.appfair.app.`, no two apps may claim one, and Play takes the same id with hyphens as underscores. |
 | `distribution` | The channels for each target. Each target is built once; each channel under it is a submission. |
 | `<channel>` | Settings for one channel, named after it, for a channel this app distributes to. |
 
-The build flavor is set by the catalog and cannot be named in a submission.
+The build flavor is set by the catalog and cannot be named in a submission. An app that carries
+no `Day-appfair.toml` is built as it stands.
 
 ### Why a commit and a tag
 
@@ -210,9 +217,11 @@ change.
 ### When the comparison differs
 
 The App Fair publishes the build it made, checked against the release the app's CI published from
-the same commit. Identity is normalized on both sides, and the app's own binary is expected to
-differ, since day compiles the display name into it and the flavor states a different one —
-`policy.yaml: expected-differences` names those paths and the run reports them as expected.
+the same commit. Identity is normalized on both sides. Where a flavor states a different display
+name, the app's own binary is expected to differ, since day compiles that name into it —
+`policy.yaml: expected-differences` names those paths and the run reports them as expected. An app
+with no flavor is built from the same manifest as its own release, so nothing is expected to
+differ.
 
 Any other difference means one of the two builds is not reproducible from that source: a timestamp
 baked into an asset, a dependency resolved differently, a different toolchain version. The run's
@@ -265,13 +274,13 @@ that: a release with no notes leaves the reviewer reading commits.
 | where | what to do |
 |---|---|
 | the file's checks | read the annotation, fix the file, push to the same branch |
-| the app's checks | the app and the submission disagree, usually about the flavor's id, a version that is not the one the tag names, or a tag that has moved off the pinned commit. Fix it in the app, tag again, and update `tag` and `commit` here |
+| the app's checks | the app and the submission disagree, usually about the id it builds under, a version that is not the one the tag names, or a tag that has moved off the pinned commit. Fix it in the app, tag again, and update `tag` and `commit` here |
 | the build | the app does not build at that commit on that target. Fix it in the app's repository |
 | identity or permissions | the package and the manifest disagree; both come from the app, so the fix is there |
 | the comparison | reproduce the difference, or have a maintainer waive it with the label |
 | the scan | a maintainer will contact you; nothing is published after a scan finds something |
 | the upload | open a [publication problem](https://github.com/appfair/appfair-apps/issues/new?template=publication-problem.yml) with the run link |
-| the store check before signing | the release cannot land as it stands: Play already has this version code (raise `build` in the flavor and tag again), or the App Store record carries a language the listing does not |
+| the store check before signing | the release cannot land as it stands: Play already has this version code (raise `build` in the manifest and tag again), or the App Store record carries a language the listing does not |
 | the confirmation | the lane finished but the store does not show the submission. A binary already uploaded cannot be sent again under the same build number, so a maintainer finishes it by running the publish workflow with `channel: apple-app-store` and `lane: ios submit` |
 
 ## Running the checks yourself

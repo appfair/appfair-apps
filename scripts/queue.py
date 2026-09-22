@@ -39,7 +39,7 @@ STATE = ROOT / "state" / "published.json"
 
 # The keys a submission may carry; anything else is rejected as a typo. A channel's settings live
 # under its name, and policy.yaml lists the channels and the settings each one takes.
-TOP_LEVEL = {"token", "title", "tag", "commit", "distribution", "summary"}
+TOP_LEVEL = {"token", "title", "tag", "commit", "distribution", "summary", "id"}
 
 
 def load_yaml(path: Path) -> dict:
@@ -265,6 +265,22 @@ def validate_app(app: App, policy: Policy, others: list[App] | None = None) -> l
     if token and app.path.stem != token:
         bad(f"the file is named {app.path.name} while its token is {token!r}; they have to agree")
 
+    # The id is the token's by default. A submission states one only to keep an id it already
+    # publishes under, and it stays in the catalog's namespace.
+    declared_id = data.get("id")
+    if declared_id is not None:
+        if not isinstance(declared_id, str) or not declared_id.startswith(policy.id_namespace):
+            bad(
+                f"id {declared_id!r} has to start with {policy.id_namespace!r}: the App Fair "
+                f"publishes inside its own namespace"
+            )
+        elif not re.match(policy.token_pattern, declared_id[len(policy.id_namespace):]):
+            bad(
+                f"id {declared_id!r} ends in "
+                f"{declared_id[len(policy.id_namespace):]!r}, which is not a token "
+                f"({policy.token_pattern})"
+            )
+
     title = data.get("title")
     if not isinstance(title, str) or not title.strip():
         bad("title is required: the name people see on their device and in the store")
@@ -363,6 +379,9 @@ def validate_app(app: App, policy: Policy, others: list[App] | None = None) -> l
             continue
         if isinstance(title, str) and str(other.data.get("title", "")).lower() == title.lower():
             bad(f"title {title!r} is already taken by {other.path.name}")
+        # Two apps publishing as one id would submit to each other's store records.
+        if token and published_id(app, policy) == published_id(other, policy):
+            bad(f"id {published_id(app, policy)!r} is already taken by {other.path.name}")
 
     return problems
 
@@ -425,6 +444,23 @@ def app_channels(app: App, policy: Policy) -> list[tuple[str, Channel]]:
     return out
 
 
+def published_id(app: App, policy: Policy) -> str:
+    """The bundle id this app publishes under.
+
+    `<namespace><token>` unless the submission states an `id`, which a renamed app does: the
+    stores key a record by the id it was first published under, so following the new token
+    would abandon the listing, its reviews and its existing installs. The id stays inside the
+    catalog's namespace either way.
+    """
+    declared = str(app.data.get("id") or "").strip()
+    return declared or f"{policy.id_namespace}{app.token}"
+
+
+def published_android_id(app: App, policy: Policy) -> str:
+    """The same id as Play spells it: a package name takes no hyphen."""
+    return published_id(app, policy).replace("-", "_")
+
+
 def runner_for(target: str, policy: Policy) -> str:
     """The runner image a target builds on.
 
@@ -443,7 +479,7 @@ def matrix_entry(app: App, policy: Policy) -> dict:
     return {
         "token": app.token,
         "title": app.data.get("title", app.token),
-        "app_id": f"{policy.id_namespace}{app.token}",
+        "app_id": published_id(app, policy),
         "repo": app.owner_repo,
         "tag": app.data.get("tag", ""),
         "commit": app.data.get("commit", ""),
@@ -596,7 +632,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
     resolved_id = project.get("id", "")
     version = str(project.get("version", ""))
     tag = str(app.data.get("tag", ""))
-    expected_id = f"{policy.id_namespace}{app.token}"
+    expected_id = published_id(app, policy)
 
     def bad(message: str) -> None:
         problems.append(Problem(rel, message))
@@ -610,7 +646,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
     android = project.get("resolved", {}).get("android-mdc", {})
     if "android-mdc" in app.data.get("distribution", {}):
-        expected_android = f"{policy.id_namespace}{app.token.replace('-', '_')}"
+        expected_android = published_android_id(app, policy)
         if android.get("id") != expected_android:
             bad(f"Android must build under {expected_android!r}, not {android.get('id')!r}")
 
@@ -648,11 +684,20 @@ def cmd_verify(args: argparse.Namespace) -> int:
                 f"({', '.join(sorted(declared))})"
             )
 
+    # Which flavor this was read with. An app that declares the catalog's flavor has to be read
+    # through it, since that manifest is what states the identity it publishes under; an app
+    # that declares none is read as it stands, and then a flavored read is the workflow's bug.
     flavor = metadata.get("flavor") or ""
-    if flavor != policy.flavor:
+    declares = set(metadata.get("flavors") or [])
+    if policy.flavor in declares and flavor != policy.flavor:
         bad(
-            f"the metadata was read with flavor {flavor!r}, and this catalog builds "
-            f"{policy.flavor!r}; the workflow and policy.yaml disagree"
+            f"{app.token} carries Day-{policy.flavor}.toml, and the metadata was read with "
+            f"flavor {flavor!r}; the workflow and policy.yaml disagree"
+        )
+    elif policy.flavor not in declares and flavor:
+        bad(
+            f"the metadata was read with flavor {flavor!r}, which {app.token} does not declare "
+            f"({', '.join(sorted(declares)) or 'it declares none'})"
         )
 
     for problem in problems:
@@ -756,15 +801,21 @@ def fetch_text(owner_repo: str, ref: str, path: str) -> str | None:
 
 
 def app_title(owner_repo: str, commit: str, token: str, flavor: str) -> str:
-    """The app's name, from its store listing, then its flavor manifest, then the token."""
-    name = fetch_text(owner_repo, commit, f"store-{flavor}/en/name.txt")
-    if name:
-        return name.splitlines()[0].strip()
-    manifest = fetch_text(owner_repo, commit, f"Day-{flavor}.toml")
-    if manifest:
-        match = re.search(r'(?m)^\s*title\s*=\s*"([^"]+)"', manifest)
-        if match:
-            return match.group(1)
+    """The app's name, from its store listing, then its manifest, then the token.
+
+    The flavor's listing and manifest first, for an app that carries one, then the app's own:
+    a flavor is optional, and without one those are the files that name it.
+    """
+    for path in (f"store-{flavor}/en/name.txt", "store/en/name.txt"):
+        name = fetch_text(owner_repo, commit, path)
+        if name:
+            return name.splitlines()[0].strip()
+    for path in (f"Day-{flavor}.toml", "Day.toml"):
+        manifest = fetch_text(owner_repo, commit, path)
+        if manifest:
+            match = re.search(r'(?m)^\s*title\s*=\s*"([^"]+)"', manifest)
+            if match:
+                return match.group(1)
     return token.replace("-", " ")
 
 
@@ -1201,7 +1252,7 @@ def cmd_record(args: argparse.Namespace) -> int:
     policy = Policy.load()
     state.setdefault("apps", {})[app.token] = {
         "title": app.data.get("title", app.token),
-        "id": f"{policy.id_namespace}{app.token}",
+        "id": published_id(app, policy),
         "repo": app.repo_url,
         "tag": args.tag or app.data.get("tag", ""),
         "channels": sorted(c for c in (args.channels or "").split(",") if c),
@@ -1922,6 +1973,16 @@ CASES: list[tuple[str, str, str]] = [
         "a submission choosing its own flavor",
         "title: Fair Games|title: Fair Games\nflavor: something-else",
         "unknown key",
+    ),
+    (
+        "an id outside the catalog's namespace",
+        "title: Fair Games|title: Fair Games\nid: com.example.games",
+        "has to start with",
+    ),
+    (
+        "an id whose last segment is not a token",
+        "title: Fair Games|title: Fair Games\nid: org.appfair.app.fair games",
+        "which is not a token",
     ),
     (
         "a title longer than the store takes",

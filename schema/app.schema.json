@@ -46,6 +46,14 @@
         "8b03beeedf19b241954b31678ac8e3fbc816dcc7"
       ]
     },
+    "id": {
+      "type": "string",
+      "pattern": "^org\\.appfair\\.app\\.[A-Za-z][A-Za-z0-9-]{1,38}$",
+      "description": "The bundle id this app publishes under, when it is not org.appfair.app.<token>. A submission states one to keep an id it already publishes under: the stores key a record by the id it was first published with, so a renamed app that followed its new token would abandon its listing. Play takes the same id with hyphens as underscores.",
+      "examples": [
+        "org.appfair.app.Faire-Games"
+      ]
+    },
     "summary": {
       "type": "string",
       "maxLength": 200,

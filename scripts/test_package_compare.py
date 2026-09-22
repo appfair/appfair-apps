@@ -27,7 +27,10 @@ def metadata(flavor=False):
                artifact="fair-games" if flavor else "day-games",
                scheme="fairegames" if flavor else "daygames")
     android = {**app, "id": app["id"].replace("-", "_")}
-    return {"flavor": "appfair" if flavor else None, "project": {
+    # `flavors` is what the project declares, which is how the checks tell an app that carries
+    # no Day-appfair.toml from one whose flavor the workflow forgot.
+    return {"flavor": "appfair" if flavor else None,
+            "flavors": ["appfair"] if flavor else [], "project": {
         **app, "targets": ["ios-uikit", "android-mdc"],
         "resolved": {"ios-uikit": app, "android-mdc": android}}}
 
@@ -240,6 +243,57 @@ class ComparisonTests(unittest.TestCase):
             meta["project"]["targets"] = ["ios-uikit"]
             path.write_text(json.dumps(meta))
             self.assertEqual(queue.cmd_verify(args), 1)
+
+    def test_an_app_may_carry_no_flavor_and_publish_under_a_renamed_id(self):
+        """A flavor and a token-shaped id are both the app's own business.
+
+        An app whose Day.toml already states the App Fair identity carries no
+        `Day-appfair.toml`, and one that was renamed keeps the id its store records were created
+        under. What stays fixed: the id is inside the catalog's namespace, and an app that does
+        declare the flavor has to be read through it.
+        """
+        meta = metadata(True)
+        meta["flavor"], meta["flavors"] = None, []  # no Day-appfair.toml in the app
+        path = self.root / "metadata.json"
+        path.write_text(json.dumps(meta))
+        app = queue.App(self.root / "Games-Fair.yaml", {
+            "token": "Games-Fair", "title": "Games Fair", "tag": "v1.9.0", "commit": "a" * 40,
+            "id": "org.appfair.app.Faire-Games",
+            "distribution": {"ios-uikit": ["apple-app-store"], "android-mdc": ["google-play-store"]}})
+        args = argparse.Namespace(app="Games-Fair", metadata=str(path), tag_commit="a" * 40)
+        with patch.object(queue, "catalog", return_value=[app]), patch.dict(
+            "os.environ", {"GITHUB_REPOSITORY": "appfair/appfair-apps"}
+        ), contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(queue.cmd_verify(args), 0)
+            # Without the declared id, the same build is the wrong app.
+            del app.data["id"]
+            self.assertEqual(queue.cmd_verify(args), 1)
+            app.data["id"] = "org.appfair.app.Faire-Games"
+            # An app that declares the flavor is read through it, or the workflow has a bug.
+            meta["flavors"] = ["appfair"]
+            path.write_text(json.dumps(meta))
+            self.assertEqual(queue.cmd_verify(args), 1)
+            # And one that declares none is read as it stands, never with a flavor.
+            meta["flavors"], meta["flavor"] = [], "appfair"
+            path.write_text(json.dumps(meta))
+            self.assertEqual(queue.cmd_verify(args), 1)
+
+    def test_an_id_outside_the_namespace_or_taken_by_another_app_is_refused(self):
+        policy = queue.Policy.load()
+        def app(path_name, data):
+            return queue.App(self.root / path_name, data)
+        base = {"token": "Games-Fair", "title": "Games Fair", "tag": "v1.9.0", "commit": "a" * 40,
+                "distribution": {"ios-uikit": ["apple-app-store"]}}
+        mine = app("Games-Fair.yaml", {**base, "id": "org.appfair.app.Faire-Games"})
+        theirs = app("Faire-Games.yaml", {"token": "Faire-Games", "title": "Fair Games",
+                                          "tag": "v1.9.0", "commit": "a" * 40,
+                                          "distribution": {"ios-uikit": ["apple-app-store"]}})
+        self.assertTrue(any("already taken" in p.message
+                            for p in queue.validate_app(mine, policy, [mine, theirs])))
+        outside = app("Games-Fair.yaml", {**base, "id": "com.example.games"})
+        self.assertTrue(any("has to start with" in p.message
+                            for p in queue.validate_app(outside, policy)))
+        self.assertEqual(queue.published_android_id(mine, policy), "org.appfair.app.Faire_Games")
 
 
 if __name__ == "__main__":

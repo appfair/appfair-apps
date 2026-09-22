@@ -21,7 +21,9 @@ inputs:
     description: The Day target these packages were built for.
     required: true
   flavor:
-    description: The Day build flavor the submission names.
+    description: >-
+      The Day build flavor the catalog names, used when the app carries its manifest. An app
+      that publishes under its own identity needs no flavor.
     required: false
     default: appfair
   packages:
@@ -87,13 +89,31 @@ runs:
       with:
         version: ${{ inputs.day-version }}
 
+    - name: Which flavor this app builds
+      id: flavor
+      shell: bash
+      env:
+        FLAVOR: ${{ inputs.flavor }}
+      run: |
+        set -euo pipefail
+        # Carrying a flavor is the app's choice: without `Day-<flavor>.toml` the manifest is
+        # read as it stands, which is the identity the app publishes under.
+        if [ -n "$FLAVOR" ] && [ -f "app-data/Day-$FLAVOR.toml" ]; then
+          echo "args=--flavor $FLAVOR" >> "$GITHUB_OUTPUT"
+        else
+          echo "args=" >> "$GITHUB_OUTPUT"
+          echo "reading ${{ inputs.repo }}'s manifest as it stands${FLAVOR:+ (it carries no Day-$FLAVOR.toml)}"
+        fi
+
     - name: What the app's manifest declares
       shell: bash
+      env:
+        FLAVOR_ARGS: ${{ steps.flavor.outputs.args }}
       run: |
         set -euo pipefail
         # `day metadata` reads Day.toml, the flavor manifest and Cargo.toml. It builds nothing and
         # runs nothing from the app.
-        (cd app-data && "$DAY_BIN" --flavor "${{ inputs.flavor }}" metadata --json) > metadata.json
+        (cd app-data && "$DAY_BIN" $FLAVOR_ARGS metadata --json) > metadata.json
         (cd app-data && "$DAY_BIN" metadata --json) > base-metadata.json
         python3 -c "import json;d=json.load(open('metadata.json'));p=d['project'];print('manifest:',p['id'],p['version'],p['build'])"
 

@@ -118,7 +118,10 @@ jobs:
         run: |
           set -euo pipefail
           FLAVOR="${{ matrix.flavor }}"
-          if [ -n "$FLAVOR" ]; then
+          # The catalog names a flavor; carrying one is the app's choice. Without
+          # `Day-<flavor>.toml` the manifest is read as it stands, which is then the identity
+          # the app publishes under.
+          if [ -n "$FLAVOR" ] && [ -f "app-data/Day-$FLAVOR.toml" ]; then
             (cd app-data && "$DAY_BIN" --flavor "$FLAVOR" metadata --json) > metadata.json
           else
             (cd app-data && "$DAY_BIN" metadata --json) > metadata.json

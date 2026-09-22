@@ -2,7 +2,9 @@
 # pull request. Changing what the App Fair accepts is an edit to this file.
 
 # The bundle-id namespace. The App Fair Project is the publisher of record for everything in it
-# (https://appfair.org/docs/building/#bundle-id).
+# (https://appfair.org/docs/building/#bundle-id). An app publishes as `<namespace><token>` unless
+# its submission states an `id`, which a renamed app does to keep the record the stores hold; that
+# id stays inside this namespace.
 id-namespace: org.appfair.app.
 
 # The app token: the name of the app's GitHub organization and repository, the last segment of its
@@ -58,10 +60,11 @@ channels:
     options: [submit]
     status: planned
 
-# The Day build flavor every submission is built with. It defaults to this repository's name
-# without the `-apps` suffix, so `appfair-apps` builds each app's `appfair` flavor and a fork
-# called `gamesfair-apps` builds `gamesfair` with no edit here. The flavor's manifest
-# (`Day-<flavor>.toml` in the app) carries the identity the app is published under.
+# The Day build flavor a submission is built with when the app carries one. It defaults to this
+# repository's name without the `-apps` suffix, so `appfair-apps` builds each app's `appfair`
+# flavor and a fork called `gamesfair-apps` builds `gamesfair` with no edit here. The flavor's
+# manifest (`Day-<flavor>.toml` in the app) carries the identity the app is published under, for
+# an app whose own builds go out under another. An app without that file is built as it stands.
 #
 # flavor: appfair
 
@@ -120,9 +123,10 @@ ignore-in-comparison:
   - "*.kotlin_module"
   - "stamp-cert-sha256"
 
-# Paths allowed to differ between the two builds. A flavor states a different display name, and
+# Paths allowed to differ between the two builds. Where a flavor states a different display name,
 # day compiles that name into the app through `day_build::app_title()`, so the native code a
-# flavor build produces cannot match the base release byte for byte. A difference in one of these
+# flavor build produces cannot match the base release byte for byte. An app with no flavor builds
+# from one manifest and matches everywhere; these allowances simply go unused. A difference in one of these
 # is reported and passes; a difference anywhere else — another file, a changed asset, different
 # DEX, an extra library — still counts.
 #
