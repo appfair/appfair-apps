@@ -48,10 +48,18 @@
     },
     "id": {
       "type": "string",
-      "pattern": "^org\\.appfair\\.app\\.[A-Za-z][A-Za-z0-9-]{1,38}$",
-      "description": "The bundle id this app publishes under, when it is not org.appfair.app.<token>. A submission states one to keep an id it already publishes under: the stores key a record by the id it was first published with, so a renamed app that followed its new token would abandon its listing. Play takes the same id with hyphens as underscores.",
+      "pattern": "^[A-Za-z][\\w-]*(\\.[\\w-]+)+$",
+      "description": "The bundle id this app publishes under, when it is not org.appfair.app.<token> — an app keeps the id its store records were created under by writing it here. Any id the stores accept is allowed; the check is only that the app builds the id this file names. Play takes this id with hyphens as underscores unless android-id says otherwise.",
       "examples": [
         "org.appfair.app.Faire-Games"
+      ]
+    },
+    "android-id": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+$",
+      "description": "The package name this app publishes under on Google Play, when it is not the bundle id with hyphens as underscores. A Java package name: two or more segments, each starting with a letter, no hyphen.",
+      "examples": [
+        "org.appfair.app.Faire_Games"
       ]
     },
     "summary": {

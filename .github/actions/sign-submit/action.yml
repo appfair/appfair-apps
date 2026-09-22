@@ -74,7 +74,10 @@ inputs:
     description: The password for that certificate.
     required: false
   app-id:
-    description: The bundle id being published; profiles are issued per bundle id.
+    description: >-
+      The bundle id the catalog expects this app to publish under, used only as a fallback: the
+      id that is actually published, and that a profile is issued for, comes from the app's own
+      manifest.
     required: false
   apple-team:
     description: The Apple Developer team id the App Store Connect key belongs to.
@@ -193,9 +196,16 @@ runs:
         set -euo pipefail
         (cd app-data && "$DAY_BIN" $FLAVOR_ARGS metadata --json) \
           > submitted-metadata.json 2>/dev/null
+        # The id this app publishes under is the one its own manifest states — the catalog's
+        # `app_id` is the convention, not the authority, and an app may publish under any id the
+        # stores accept. The later steps read this back.
+        APP_ID=$(python3 -c 'import json,sys; p=json.load(open("submitted-metadata.json"))["project"]; r=p.get("resolved",{}).get(sys.argv[1],{}); print(r.get("id") or p.get("id") or "")' "${{ inputs.target }}")
+        [ -n "$APP_ID" ] || { echo "::error::the app manifest states no id for ${{ inputs.target }}"; exit 1; }
+        echo "APP_ID=$APP_ID" >> "$GITHUB_ENV"
+        echo "publishing as $APP_ID"
         case "${{ inputs.channel }}" in
           apple-app-store)
-            python3 scripts/asc_state.py --bundle-id "${{ inputs.app-id }}" \
+            python3 scripts/asc_state.py \
               --metadata submitted-metadata.json --target "${{ inputs.target }}" --preflight ;;
           google-play-store)
             python3 scripts/play_state.py --metadata submitted-metadata.json \
@@ -260,7 +270,7 @@ runs:
           exit 1
         }
 
-    - name: The App Store profile for ${{ inputs.app-id }}
+    - name: The App Store profile for this app's id
       if: inputs.target == 'ios-uikit'
       shell: bash
       env:
@@ -271,8 +281,11 @@ runs:
         ASC_ISSUER: ${{ env.APPFAIR_ASC_ISSUER }}
         ASC_KEY_PATH: ${{ env.APPFAIR_ASC_KEY_PATH }}
         APPLE_TEAM: ${{ inputs.apple-team }}
-        APP_ID: ${{ inputs.app-id }}
+        # APP_ID comes from the app's manifest, read above; the catalog's value is the fallback
+        # for a run that skipped that step.
+        FALLBACK_APP_ID: ${{ inputs.app-id }}
       run: |
+        APP_ID="${APP_ID:-$FALLBACK_APP_ID}"
         set -euo pipefail
         DEST="$RUNNER_TEMP/appstore.mobileprovision"
 
@@ -386,7 +399,7 @@ runs:
           *release|*submit) EXPECT=submitted ;;
           *) EXPECT=uploaded ;;
         esac
-        python3 scripts/asc_state.py --bundle-id "${{ inputs.app-id }}" \
+        python3 scripts/asc_state.py \
           --metadata submitted-metadata.json --target "${{ inputs.target }}" --expect "$EXPECT"
 
     - name: Keep the signed package

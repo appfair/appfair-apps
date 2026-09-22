@@ -12,8 +12,11 @@ go straight to a pull request.
 
 ## What the app needs
 
-Every app is published as `org.appfair.app.<token>`, where the token is the app's GitHub
-organization and repository name.
+An app is published under the id its build resolves to, read from its own manifest and from its
+`Day-appfair.toml` when it carries one. Every such id starts with `org.appfair.app.`; what follows
+is the app's own business. `org.appfair.app.<token>` is the convention a new app follows, where
+the token is the app's GitHub organization and repository name, and an app that arrived with store
+records under another spelling keeps them. Two apps may not publish under one id.
 
 Where the maintainer's own builds go out under the maintainer's identity, the App Fair's identity
 lives in a [build flavor](https://daybrite.dev/docs/flavors): a `Day-appfair.toml` beside
@@ -84,7 +87,8 @@ title: Fair Games                                  # required
 tag: v2.0.1                                        # required
 commit: 549bac3f78ce937146b56a7acecc35cb361175e3   # required
 summary: Classic puzzle and arcade games, offline. # optional
-id: org.appfair.app.Faire-Games                    # optional, for an app that was renamed
+id: org.appfair.app.Faire-Games                    # optional, pins the record published to
+android-id: org.appfair.app.Faire_Games            # optional, the same pin for Google Play
 
 distribution:                                      # required
   ios-uikit:
@@ -114,7 +118,8 @@ two lines.
 | `tag` | The released tag, `vX.Y.Z`. It names the version published, so the app at that commit has to build `X.Y.Z`. The release assets hang off it. |
 | `commit` | What that tag points at, in full and in lower case. Every stage checks this out. |
 | `summary` | One line for people reading the catalog. The store listing is the app's own. |
-| `id` | The bundle id this app publishes under, when it is not `org.appfair.app.<token>`. A renamed app states the id its store records were created under, since a store keys a record by its id and following the new token would abandon the listing. It stays inside `org.appfair.app.`, no two apps may claim one, and Play takes the same id with hyphens as underscores. |
+| `id` | Pins the bundle id this app publishes under. Optional: the queue reads the id from the build either way, and any id the stores accept inside `org.appfair.app.` is allowed. Stating it means a build that changes the record it publishes to is caught by the checks. No two apps may publish under one id. |
+| `android-id` | The same pin for Google Play, when the package name is not the bundle id with hyphens as underscores. |
 | `distribution` | The channels for each target. Each target is built once; each channel under it is a submission. |
 | `<channel>` | Settings for one channel, named after it, for a channel this app distributes to. |
 
@@ -187,12 +192,12 @@ A pull request runs the stages a merge runs, stopping before the signing.
 
 1. **The rules against themselves** (`scripts/queue.py selftest`), so a change to the checks is
    checked too.
-2. **The file**: the shape above, the namespace, the tag pattern, the channels and their targets,
-   and the title's uniqueness across the catalog.
+2. **The file**: the shape above, the tag pattern, the channels and their targets, and the
+   uniqueness of the title and of the ids across the catalog.
 3. **The app against the file**: the pinned commit's manifest, read through a sparse checkout that
-   excludes the source. `day metadata --json` must report `org.appfair.app.<token>`, the version
-   the tag names, and the targets the file asks for, and the tag must still point at the pinned
-   commit.
+   excludes the source. `day metadata --json` must report the version the tag names and the
+   targets the file asks for, the tag must still point at the pinned commit, and the id it builds
+   has to match an `id` pin when the file states one.
 4. **The reviewer's comment**: for an update, the range between the commit already published and
    the one this pull request proposes, with the number of commits and files, the build and
    packaging files inside it, and a link to read it on GitHub. A first submission gets a link to
@@ -274,7 +279,7 @@ that: a release with no notes leaves the reviewer reading commits.
 | where | what to do |
 |---|---|
 | the file's checks | read the annotation, fix the file, push to the same branch |
-| the app's checks | the app and the submission disagree, usually about the id it builds under, a version that is not the one the tag names, or a tag that has moved off the pinned commit. Fix it in the app, tag again, and update `tag` and `commit` here |
+| the app's checks | the app and the submission disagree, usually about a version that is not the one the tag names, a tag that has moved off the pinned commit, or an `id` pin the build no longer matches. Fix it in the app, tag again, and update `tag` and `commit` here |
 | the build | the app does not build at that commit on that target. Fix it in the app's repository |
 | identity or permissions | the package and the manifest disagree; both come from the app, so the fix is there |
 | the comparison | reproduce the difference, or have a maintainer waive it with the label |

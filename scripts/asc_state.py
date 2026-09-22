@@ -201,7 +201,10 @@ def report(heading: list[str], lines: list[str], problems: list[str]) -> None:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--bundle-id", required=True)
+    parser.add_argument(
+        "--bundle-id",
+        help="the record to ask about; taken from --metadata when left out",
+    )
     parser.add_argument("--version", help="the version string, such as 2.0.2")
     parser.add_argument("--build", help="the build number, such as 36")
     parser.add_argument("--metadata", help="`day metadata --json`, to take the numbers from")
@@ -231,8 +234,14 @@ def main(argv=None) -> int:
         resolved = project.get("resolved", {}).get(args.target, {})
         args.version = args.version or str(resolved.get("version", project["version"]))
         args.build = args.build or str(resolved.get("build", project["build"]))
+        # The record to ask about is the one this build carries: an app publishes under the id
+        # its own manifest states, whatever that is.
+        args.bundle_id = args.bundle_id or str(resolved.get("id") or project.get("id") or "")
     if not (args.version and args.build):
         print("::error::asc_state.py needs --version and --build, or --metadata to read them from")
+        return 1
+    if not args.bundle_id:
+        print("::error::asc_state.py needs --bundle-id, or --metadata to read it from")
         return 1
 
     key_id = os.environ.get("APPFAIR_ASC_KEY_ID", "")

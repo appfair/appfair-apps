@@ -39,7 +39,12 @@ STATE = ROOT / "state" / "published.json"
 
 # The keys a submission may carry; anything else is rejected as a typo. A channel's settings live
 # under its name, and policy.yaml lists the channels and the settings each one takes.
-TOP_LEVEL = {"token", "title", "tag", "commit", "distribution", "summary", "id"}
+TOP_LEVEL = {"token", "title", "tag", "commit", "distribution", "summary", "id", "android-id"}
+
+# What each store accepts as an id. Apple takes letters, digits, hyphens and periods; Play takes a
+# Java package name, which rules the hyphen out and wants every segment to start with a letter.
+BUNDLE_ID = re.compile(r"^[A-Za-z][\w-]*(\.[\w-]+)+$")
+PACKAGE_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$")
 
 
 def load_yaml(path: Path) -> dict:
@@ -265,20 +270,24 @@ def validate_app(app: App, policy: Policy, others: list[App] | None = None) -> l
     if token and app.path.stem != token:
         bad(f"the file is named {app.path.name} while its token is {token!r}; they have to agree")
 
-    # The id is the token's by default. A submission states one only to keep an id it already
-    # publishes under, and it stays in the catalog's namespace.
-    declared_id = data.get("id")
-    if declared_id is not None:
-        if not isinstance(declared_id, str) or not declared_id.startswith(policy.id_namespace):
+    # What the app publishes under. A submission states these only when they are not the
+    # catalog's default spelling (`<namespace><token>`, and that with hyphens as underscores for
+    # Play); the value itself is the app's own, checked for being an id the stores accept rather
+    # than for following the token.
+    for field, pattern, shape in (
+        ("id", BUNDLE_ID, "reverse-DNS, two or more segments of letters, digits, `_` or `-`"),
+        ("android-id", PACKAGE_NAME, "a Java package name: two or more segments, each starting "
+                                     "with a letter, no hyphen"),
+    ):
+        declared = data.get(field)
+        if declared is None:
+            continue
+        if not isinstance(declared, str) or not pattern.match(declared):
+            bad(f"{field} {declared!r} is not one the stores accept ({shape})")
+        elif not declared.startswith(policy.id_namespace):
             bad(
-                f"id {declared_id!r} has to start with {policy.id_namespace!r}: the App Fair "
-                f"publishes inside its own namespace"
-            )
-        elif not re.match(policy.token_pattern, declared_id[len(policy.id_namespace):]):
-            bad(
-                f"id {declared_id!r} ends in "
-                f"{declared_id[len(policy.id_namespace):]!r}, which is not a token "
-                f"({policy.token_pattern})"
+                f"{field} {declared!r} is outside {policy.id_namespace!r}, which is where the "
+                f"App Fair publishes"
             )
 
     title = data.get("title")
@@ -380,8 +389,12 @@ def validate_app(app: App, policy: Policy, others: list[App] | None = None) -> l
         if isinstance(title, str) and str(other.data.get("title", "")).lower() == title.lower():
             bad(f"title {title!r} is already taken by {other.path.name}")
         # Two apps publishing as one id would submit to each other's store records.
-        if token and published_id(app, policy) == published_id(other, policy):
-            bad(f"id {published_id(app, policy)!r} is already taken by {other.path.name}")
+        if not token:
+            continue
+        for what, resolve in (("id", published_id), ("android-id", published_android_id)):
+            mine = resolve(app, policy)
+            if mine == resolve(other, policy):
+                bad(f"{what} {mine!r} is already taken by {other.path.name}")
 
     return problems
 
@@ -447,18 +460,22 @@ def app_channels(app: App, policy: Policy) -> list[tuple[str, Channel]]:
 def published_id(app: App, policy: Policy) -> str:
     """The bundle id this app publishes under.
 
-    `<namespace><token>` unless the submission states an `id`, which a renamed app does: the
-    stores key a record by the id it was first published under, so following the new token
-    would abandon the listing, its reviews and its existing installs. The id stays inside the
-    catalog's namespace either way.
+    Whatever the submission states, and `<namespace><token>` when it states nothing — the
+    convention a new app follows, not a rule about what an id may be. An app keeps the id its
+    store records were created under by writing it here, and any valid id is a valid answer.
     """
     declared = str(app.data.get("id") or "").strip()
     return declared or f"{policy.id_namespace}{app.token}"
 
 
 def published_android_id(app: App, policy: Policy) -> str:
-    """The same id as Play spells it: a package name takes no hyphen."""
-    return published_id(app, policy).replace("-", "_")
+    """The id Play publishes this app under.
+
+    `android-id` when the submission states one; otherwise the bundle id with hyphens as
+    underscores, since a Java package name takes no hyphen and that is the spelling day derives.
+    """
+    declared = str(app.data.get("android-id") or "").strip()
+    return declared or published_id(app, policy).replace("-", "_")
 
 
 def runner_for(target: str, policy: Policy) -> str:
@@ -632,23 +649,47 @@ def cmd_verify(args: argparse.Namespace) -> int:
     resolved_id = project.get("id", "")
     version = str(project.get("version", ""))
     tag = str(app.data.get("tag", ""))
-    expected_id = published_id(app, policy)
-
     def bad(message: str) -> None:
         problems.append(Problem(rel, message))
 
-    if resolved_id != expected_id:
-        bad(
-            f"{app.token} has to build under {expected_id!r}, and this tag builds {resolved_id!r}. "
-            f"An App Fair build takes its identity from a Day flavor; see "
-            f"https://appfair.org/docs/building/#bundle-id"
-        )
-
+    # The id an app publishes under is the app's own: whatever its manifest states, the stores
+    # accept, and no other submission has claimed. The catalog does not derive it from the token
+    # and does not require it to be written here — every stage that needs it reads it from the
+    # build. A submission that DOES state `id` / `android-id` pins it, and then a build that
+    # changed the record it publishes to is caught here rather than at the store.
     android = project.get("resolved", {}).get("android-mdc", {})
-    if "android-mdc" in app.data.get("distribution", {}):
-        expected_android = published_android_id(app, policy)
-        if android.get("id") != expected_android:
-            bad(f"Android must build under {expected_android!r}, not {android.get('id')!r}")
+    built_ids = {"id": resolved_id, "android-id": android.get("id", "")}
+
+    # The App Fair is the publisher of record for what it uploads, so every id a submission
+    # resolves to is inside its namespace; what follows the namespace is the app's own business.
+    # An app whose own builds go out under another id puts these in its flavor manifest
+    # (`Day-<flavor>.toml`), which is what the queue reads.
+    for field, value in built_ids.items():
+        if not value or (field == "android-id" and "android-mdc" not in app.data.get("distribution", {})):
+            continue
+        if not value.startswith(policy.id_namespace):
+            bad(
+                f"this tag builds {field} {value!r}, which is outside {policy.id_namespace!r}. "
+                f"An App Fair build publishes inside that namespace; state the id it publishes "
+                f"under in Day-{policy.flavor}.toml, which the queue builds through"
+            )
+    for field, resolve in (("id", published_id), ("android-id", published_android_id)):
+        if field == "android-id" and "android-mdc" not in app.data.get("distribution", {}):
+            continue
+        if app.data.get(field) is None:
+            continue
+        pinned = resolve(app, policy)
+        if built_ids[field] != pinned:
+            bad(
+                f"this file pins {field} {pinned!r}, and this tag builds {built_ids[field]!r}. "
+                f"Update the pin for an intentional change of store record, or check with the "
+                f"maintainer"
+            )
+    for other in everything:
+        if other.path == app.path or other.data.get("id") is None:
+            continue
+        if published_id(other, policy) == resolved_id:
+            bad(f"{other.path.name} already publishes {resolved_id!r}")
 
     # Does the tag still point at the pinned commit? The stages check out the commit, so a moved
     # tag changes nothing that is built, but it usually means a different release was intended.
@@ -704,7 +745,8 @@ def cmd_verify(args: argparse.Namespace) -> int:
         problem.emit()
     if problems:
         return 1
-    print(f"verified {app.token}: {resolved_id} {version} ({project.get('build')}) from {tag}")
+    ids = resolved_id + (f" / {built_ids['android-id']}" if built_ids["android-id"] else "")
+    print(f"verified {app.token}: {ids} {version} ({project.get('build')}) from {tag}")
     return 0
 
 
@@ -1975,14 +2017,19 @@ CASES: list[tuple[str, str, str]] = [
         "unknown key",
     ),
     (
-        "an id outside the catalog's namespace",
-        "title: Fair Games|title: Fair Games\nid: com.example.games",
-        "has to start with",
+        "an id that is not an id",
+        "title: Fair Games|title: Fair Games\nid: fair games",
+        "not one the stores accept",
     ),
     (
-        "an id whose last segment is not a token",
-        "title: Fair Games|title: Fair Games\nid: org.appfair.app.fair games",
-        "which is not a token",
+        "a Play package name with a hyphen in it",
+        "title: Fair Games|title: Fair Games\nandroid-id: org.appfair.app.Faire-Games",
+        "not one the stores accept",
+    ),
+    (
+        "an id outside the namespace the App Fair publishes in",
+        "title: Fair Games|title: Fair Games\nid: com.example.games",
+        "is outside",
     ),
     (
         "a title longer than the store takes",

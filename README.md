@@ -145,18 +145,26 @@ version being published, so `v2.0.2` publishes 2.0.2 on both stores; a flavor th
 repository. Its secrets live in the publish workflow's `store` environment and are reachable only
 from the signing job, so a pull request opened from a fork cannot get at them.
 
-Apps are published under `org.appfair.app.<token>` on iOS and `org.appfair.app.<token with
-hyphens as underscores>` on Google Play
-([background](https://appfair.org/docs/building/#bundle-id)). An app whose own builds go out
+An app is published under the id its build resolves to, which the queue reads from the app's own
+manifest — through its `Day-appfair.toml` when it carries one — rather than deriving: the store is
+asked about that id before signing, and the upload goes to its record. Every such id starts with
+`org.appfair.app.` ([background](https://appfair.org/docs/building/#bundle-id)); what follows is
+the app's own business. The convention for a new app is `org.appfair.app.<token>` on iOS and the
+same with hyphens as underscores on Google Play, and an app that came to the catalog with records
+under another spelling keeps them. An app whose own builds go out
 under the maintainer's id carries the App Fair's in a
 [Day build flavor](https://daybrite.dev/docs/flavors), a `Day-appfair.toml` beside its `Day.toml`;
 one whose `Day.toml` already states the App Fair id needs no flavor, and the queue then builds the
 project as it stands. The flavor is named after this repository, so a fork called
 `gamesfair-apps` builds each app's `gamesfair` flavor without any edit.
 
-An app that was renamed keeps the id it already publishes under by stating `id:` in its
-submission — the stores key a record by the id it was created with, so following the new token
-would abandon the listing. The id stays inside `org.appfair.app.`, and no two apps may claim one.
+A submission may state `id:` (and `android-id:` for Play) to pin the records it publishes to.
+Nothing requires it: the pin exists so that an app which changes the id it builds under is caught
+by the checks instead of at the store. Two submissions may not publish under one id.
+
+`Day-appfair.toml` is how an app keeps its own identity separate from the one it publishes under
+here: the queue builds, lints, validates and signs every stage through that flavor when the file
+is there, so those are the ids the checks read and the stores receive.
 
 ## Submitting
 

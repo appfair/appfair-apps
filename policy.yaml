@@ -1,14 +1,17 @@
 # The rules the catalog applies to a submission. `scripts/queue.py validate` reads this on every
 # pull request. Changing what the App Fair accepts is an edit to this file.
 
-# The bundle-id namespace. The App Fair Project is the publisher of record for everything in it
-# (https://appfair.org/docs/building/#bundle-id). An app publishes as `<namespace><token>` unless
-# its submission states an `id`, which a renamed app does to keep the record the stores hold; that
-# id stays inside this namespace.
+# The bundle-id namespace the App Fair publishes in
+# (https://appfair.org/docs/building/#bundle-id). Every id a submission resolves to has to start
+# with it, because this catalog is the publisher of record for what it uploads. What follows is
+# the app's own business: `<namespace><token>` is what a new app conventionally takes and what
+# the tooling proposes, and an app that came with records under another spelling keeps them. The
+# id itself comes from the build — the app's flavor manifest (`Day-<flavor>.toml`) is where an
+# app whose own builds go out under another id states it.
 id-namespace: org.appfair.app.
 
-# The app token: the name of the app's GitHub organization and repository, the last segment of its
-# bundle id, and the name of its file under apps/. It does not change for the life of the app.
+# The app token: the name of the app's GitHub organization and repository, and the name of its
+# file under apps/. It does not change for the life of the app.
 token-pattern: '^[A-Za-z][A-Za-z0-9-]{1,38}$'
 
 # Submissions name a released tag, so that what is built is what the maintainer released and is

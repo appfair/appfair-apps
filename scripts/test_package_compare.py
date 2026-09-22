@@ -245,12 +245,12 @@ class ComparisonTests(unittest.TestCase):
             self.assertEqual(queue.cmd_verify(args), 1)
 
     def test_an_app_may_carry_no_flavor_and_publish_under_a_renamed_id(self):
-        """A flavor and a token-shaped id are both the app's own business.
+        """A flavor and the id an app publishes under are both the app's own business.
 
         An app whose Day.toml already states the App Fair identity carries no
-        `Day-appfair.toml`, and one that was renamed keeps the id its store records were created
-        under. What stays fixed: the id is inside the catalog's namespace, and an app that does
-        declare the flavor has to be read through it.
+        `Day-appfair.toml`, and an app publishes under whatever id its manifest states, with or
+        without a pin in the submission. What stays fixed: an app that DOES declare the flavor
+        has to be read through it, and a pin the build contradicts is a problem.
         """
         meta = metadata(True)
         meta["flavor"], meta["flavors"] = None, []  # no Day-appfair.toml in the app
@@ -265,8 +265,11 @@ class ComparisonTests(unittest.TestCase):
             "os.environ", {"GITHUB_REPOSITORY": "appfair/appfair-apps"}
         ), contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(queue.cmd_verify(args), 0)
-            # Without the declared id, the same build is the wrong app.
+            # And without the pin: the build still says which records it publishes to.
             del app.data["id"]
+            self.assertEqual(queue.cmd_verify(args), 0)
+            # A pin the build contradicts is caught here rather than at the store.
+            app.data["id"] = "org.appfair.app.Something-Else"
             self.assertEqual(queue.cmd_verify(args), 1)
             app.data["id"] = "org.appfair.app.Faire-Games"
             # An app that declares the flavor is read through it, or the workflow has a bug.
@@ -278,22 +281,46 @@ class ComparisonTests(unittest.TestCase):
             path.write_text(json.dumps(meta))
             self.assertEqual(queue.cmd_verify(args), 1)
 
-    def test_an_id_outside_the_namespace_or_taken_by_another_app_is_refused(self):
+    def test_an_id_is_anything_inside_the_namespace_and_not_another_app_s(self):
+        """What an id has to be, and what it cannot be.
+
+        Inside `org.appfair.app.` an id is the app's own business: any spelling the stores accept,
+        with no relation to the token. What is refused: a string neither store would take, a Play
+        package name with a hyphen in it, an id outside the namespace the App Fair publishes in,
+        and an id another submission already publishes under.
+        """
         policy = queue.Policy.load()
         def app(path_name, data):
             return queue.App(self.root / path_name, data)
         base = {"token": "Games-Fair", "title": "Games Fair", "tag": "v1.9.0", "commit": "a" * 40,
-                "distribution": {"ios-uikit": ["apple-app-store"]}}
+                "distribution": {"ios-uikit": ["apple-app-store"],
+                                 "android-mdc": ["google-play-store"]}}
         mine = app("Games-Fair.yaml", {**base, "id": "org.appfair.app.Faire-Games"})
+        self.assertEqual(queue.validate_app(mine, policy), [])
+        self.assertEqual(queue.published_android_id(mine, policy), "org.appfair.app.Faire_Games")
+
+        # An id of the app's own choosing, as long as it is inside the namespace.
+        elsewhere = app("Games-Fair.yaml", {**base, "id": "org.appfair.app.anything_at_all",
+                                            "android-id": "org.appfair.app.something_else"})
+        self.assertEqual(queue.validate_app(elsewhere, policy), [])
+        self.assertEqual(queue.published_id(elsewhere, policy), "org.appfair.app.anything_at_all")
+        self.assertEqual(
+            queue.published_android_id(elsewhere, policy), "org.appfair.app.something_else"
+        )
+
+        # And the refusals.
+        for data, wanted in (
+            ({**base, "id": "fair games"}, "not one the stores accept"),
+            ({**base, "android-id": "org.appfair.app.Faire-Games"}, "not one the stores accept"),
+            ({**base, "id": "com.example.games"}, "is outside"),
+        ):
+            problems = queue.validate_app(app("Games-Fair.yaml", data), policy)
+            self.assertTrue(any(wanted in p.message for p in problems), problems)
         theirs = app("Faire-Games.yaml", {"token": "Faire-Games", "title": "Fair Games",
                                           "tag": "v1.9.0", "commit": "a" * 40,
                                           "distribution": {"ios-uikit": ["apple-app-store"]}})
         self.assertTrue(any("already taken" in p.message
                             for p in queue.validate_app(mine, policy, [mine, theirs])))
-        outside = app("Games-Fair.yaml", {**base, "id": "com.example.games"})
-        self.assertTrue(any("has to start with" in p.message
-                            for p in queue.validate_app(outside, policy)))
-        self.assertEqual(queue.published_android_id(mine, policy), "org.appfair.app.Faire_Games")
 
 
 if __name__ == "__main__":
