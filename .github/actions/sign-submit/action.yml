@@ -231,15 +231,22 @@ runs:
         # one cannot be installed, so both are signed with the same key. `day sign apply` takes
         # the key on the command line, so the app's [signing] tables are not read and cannot
         # influence which of this runner's variables are used.
-        packages=("${{ steps.pick.outputs.package }}")
+        "$DAY_BIN" sign apply "${{ steps.pick.outputs.package }}" \
+          --keystore "$RUNNER_TEMP/upload.keystore" \
+          --key-alias "$APPFAIR_KEY_ALIAS"
+        # An .apk takes zipalign and apksigner from the Android build-tools, where the .aab takes
+        # jarsigner. A runner without them must not stop a store submission, and an unsigned .apk
+        # must not reach the release, so one that cannot be signed is deleted here.
         while IFS= read -r apk; do
-          packages+=("$apk")
+          if "$DAY_BIN" sign apply "$apk" \
+              --keystore "$RUNNER_TEMP/upload.keystore" \
+              --key-alias "$APPFAIR_KEY_ALIAS"; then
+            continue
+          fi
+          rm -f "$apk"
+          echo "::warning::$(basename "$apk") could not be signed on this runner, so it is left \
+          out of the release; the .aab Play receives is signed"
         done < <(find "${{ inputs.packages }}" -maxdepth 1 -name '*.apk' | sort)
-        for package in "${packages[@]}"; do
-          "$DAY_BIN" sign apply "$package" \
-            --keystore "$RUNNER_TEMP/upload.keystore" \
-            --key-alias "$APPFAIR_KEY_ALIAS"
-        done
 
     # --- Apple -----------------------------------------------------------------------------
     - name: Import the distribution certificate
