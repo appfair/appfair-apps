@@ -1,0 +1,22 @@
+# yaml-language-server: $schema=../schema/app.schema.json
+#
+# Games Fair in the App Fair catalog. The file is named for the app token, which is where the app
+# lives: https://github.com/Games-Fair/Games-Fair
+#
+# To publish a new version, change the tag and the commit below in a pull request. The rest is
+# read from the app's repository at that commit.
+
+token: Games-Fair
+title: Games Fair
+tag: v2.1.1
+# The commit that tag points at. Since a tag can be moved afterwards, this is what every stage
+# checks out. `scripts/queue.py update Games-Fair` rewrites both lines.
+commit: de78d658ad5ed781813dc5677456b73961f9554f
+
+# Where this app goes, keyed by the target that builds for it. policy.yaml lists the channels the
+# queue can publish to. Drop a line to keep the app off a channel.
+distribution:
+  android-mdc:
+    - google-play-store
+  ios-uikit:
+    - apple-app-store
