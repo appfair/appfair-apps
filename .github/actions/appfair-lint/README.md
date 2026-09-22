@@ -1,7 +1,7 @@
 # appfair-lint
 
-The checks an App Fair app's repository has to pass. The catalog runs them on every submission,
-and an app runs the same rules on every push:
+The catalog's rules for an app's repository. A pull request in this repository runs them on the
+submitted commit, and an app runs the same rules on every push:
 
 ```yaml
 jobs:
@@ -18,8 +18,8 @@ jobs:
 |---|---|---|
 | `path` | `.` | The project directory, the one holding `Day.toml`. |
 | `flavor` | `appfair` | The build flavor whose manifest carries the identity the catalog publishes the app under. |
-| `only` | — | Run only these rules, comma-separated. |
-| `skip` | — | Run every rule but these, comma-separated. |
+| `only` | (all) | Run only these rules, comma-separated. |
+| `skip` | (none) | Run every rule but these, comma-separated. |
 
 ## The rules
 
@@ -33,8 +33,8 @@ jobs:
 | `license-exception` | `LICENSE-EXCEPTIONS.txt` is the App Fair Distribution Exception, the same way. |
 | `spdx-headers` | Every `.rs` file names its licence in its first five lines. |
 
-A failure names the file, the line, what is wrong and the text that fixes it, and in Actions it
-also annotates the file. Every rule runs, so one push reports every problem rather than the first.
+A failure names the file, the line, what is wrong and the text that fixes it, and annotates the
+file in Actions. Every rule runs, so one push reports every problem.
 
 ## Adding a rule
 
@@ -53,6 +53,5 @@ def store_listing(project: Project) -> Iterable[Finding]:
 ```
 
 `Project` gives the root, the flavor name, `sources(".rs")` for a walk that skips build output,
-and `reference/` for material a rule compares against. Cover it in
-`scripts/test_appfair_lint.py`, which `python3 -m unittest discover -s scripts` runs in this
-repository's own checks.
+and `reference/` for material to compare against. Cover the rule in
+`scripts/test_appfair_lint.py`, which this repository's checks run.

@@ -18,17 +18,16 @@ is the app's own business. `org.appfair.app.<token>` is the convention a new app
 the token is the app's GitHub organization and repository name, and an app that arrived with store
 records under another spelling keeps them. Two apps may not publish under one id.
 
-Where the maintainer's own builds go out under the maintainer's identity, the App Fair's identity
-lives in a [build flavor](https://daybrite.dev/docs/flavors): a `Day-appfair.toml` beside
-`Day.toml`, which leaves `Day.toml` alone. An app written for the App Fair states that identity
-in `Day.toml` itself and carries no flavor; the queue then builds the project as it stands, and
-the two builds the comparison holds against each other have nothing to differ about.
+The App Fair's identity lives in a [build flavor](https://daybrite.dev/docs/flavors), a
+`Day-appfair.toml` beside `Day.toml`, so the maintainer's own builds keep the maintainer's id. An
+app that states the App Fair id in `Day.toml` needs no flavor, and the queue builds it as it
+stands.
 
 The flavor is named after this repository, so a submission does not choose the name. A fork
 called `gamesfair-apps` would build each app's `gamesfair` flavor with no other change.
 
 ```toml
-# Day-appfair.toml, in the app's repository — for an app that keeps its own identity in Day.toml
+# Day-appfair.toml, for an app that keeps its own identity in Day.toml
 store = "store-appfair"
 resources = "resource-appfair"   # optional: the icon the catalog build ships
 
@@ -58,9 +57,9 @@ key-pass = "${DAY_KEY_PASS}"
 The signing tables hold environment references, filled on the queue's runners from the App Fair's
 secrets, so nothing secret is committed to the app.
 
-The store listing — name, description, keywords, screenshots, release notes, icon — is the app's
+The store listing (name, description, keywords, screenshots, release notes, icon) is the app's
 `store-appfair/` directory and its `resource-appfair/` overlay, or plain `store/` and `resource/`
-for an app with no flavor. The queue reads them at the submitted commit and does not modify them.
+for an app with no flavor. The queue reads them at the submitted commit and modifies nothing.
 
 The tag names the version. `v2.0.2` publishes 2.0.2, so a flavor takes the source version and
 states no `version` of its own; a flavor that does is accepted only when the tag agrees with it.
@@ -146,21 +145,18 @@ or taken up with the maintainer.
 | `google-play-store` | `android-mdc` | submits the build to the production track | `submit` |
 | `altstore`, `f-droid`, `samsung-galaxy-store` | | declared but not yet implemented; a submission naming one is rejected with that message | |
 
-Publishing means submitting. A merged submission asks Apple to review the build and Google to
-review and roll it out to production; neither needs a setting to say so. Releasing on the App
-Store stays manual — an approved version waits for the Release button — and Google's rollout
-starts when review passes.
+A merged submission asks Apple to review the build and Google to review and roll it out to
+production, with no setting to say so. Releasing on the App Store stays manual, since an approved
+version waits for the Release button; Google's rollout starts when review passes.
 
-`submit: false` under a channel is the exception, for a build that should be uploaded and left
-alone: the App Store version then sits in Prepare for Submission with no build attached, and Play
-holds the bundle in the internal track as a draft.
+`submit: false` under a channel uploads and stops: the App Store version sits in Prepare for
+Submission with no build attached, and Play holds the bundle in the internal track as a draft.
 
-Before anything is signed, the queue asks each store what it already holds, and stops there when
-a release cannot land: a Play version code used once is used for good, so a repeated `build` is
-refused before a package is uploaded, and an App Store version is refused while any language on
-the record is missing its What's New or its screenshots. Every language the store record carries
-needs both — the listing in the app's repository has to cover them, or the record has to drop
-them.
+Before anything is signed, the queue asks each store what it holds and stops when a release
+cannot land. A Play version code is used for good, so a repeated `build` is refused before the
+upload, and an App Store version is refused while a language on the record lacks its What's New
+or its screenshots. Every language the record carries needs both, so either the app's listing
+covers them or the record drops them.
 
 After each lane runs, the queue asks the store what happened and fails the job when the answer
 disagrees: App Store Connect has to show the build uploaded, attached to the version, and the
@@ -226,11 +222,9 @@ change.
 ### When the comparison differs
 
 The App Fair publishes the build it made, checked against the release the app's CI published from
-the same commit. Identity is normalized on both sides. Where a flavor states a different display
-name, the app's own binary is expected to differ, since day compiles that name into it —
-`policy.yaml: expected-differences` names those paths and the run reports them as expected. An app
-with no flavor is built from the same manifest as its own release, so nothing is expected to
-differ.
+the same commit. Identity is normalized on both sides. Where a flavor states another display
+name, day compiles that name into the binary, so `policy.yaml: expected-differences` lists the
+paths that may differ for it and the run reports them as expected.
 
 Any other difference means one of the two builds is not reproducible from that source: a timestamp
 baked into an asset, a dependency resolved differently, a different toolchain version. The run's

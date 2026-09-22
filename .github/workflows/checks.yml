@@ -1,7 +1,5 @@
-# The repository's own checks: the rules against their own cases, every submission against those
-# rules, every workflow through a YAML parser, and every action call against the action it names.
-# It runs on any change here, including changes to the rules, which pr.yml only exercises against
-# whichever app a pull request touches.
+# This repository's own checks: the rules, the submissions, the workflows and the action calls.
+# Runs on every change here, including changes to the rules themselves.
 name: checks
 
 on:
@@ -9,8 +7,7 @@ on:
     branches: [main]
   pull_request:
   schedule:
-    # Daily, because the actions these workflows call live in another repository and can change
-    # under them. Better to find out here than in the middle of a submission.
+    # Daily: the actions these workflows call live in another repository and change under them.
     - cron: "40 5 * * *"
   workflow_dispatch:
 
@@ -23,13 +20,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - name: The queue's own cases
+      - name: Run the queue's selftest
         run: python3 scripts/queue.py selftest
-      - name: Package comparison and release regressions
+      - name: Run the unit tests
         run: python3 -m unittest discover -s scripts -p 'test_*.py'
-      - name: Every submission in the catalog
+      - name: Validate every submission
         run: python3 scripts/queue.py validate --all
-      - name: Every workflow parses
+      - name: Parse the workflows and actions
         run: |
           set -euo pipefail
           python3 - <<'PY'
@@ -46,7 +43,7 @@ jobs:
                   print(f"::error file={path}::{e}")
           sys.exit(1 if bad else 0)
           PY
-      - name: Every action call matches the action it names
+      - name: Check the action calls
         run: python3 scripts/queue.py wiring
-      - name: The state file is the one the scripts write
+      - name: Parse state/published.json
         run: python3 -c "import json; json.load(open('state/published.json'))"

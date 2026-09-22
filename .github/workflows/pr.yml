@@ -1,13 +1,11 @@
-# A submission, checked the way a merge will check it, without the publishing.
+# A submission, checked the way a merge checks it, without the publishing. The stages are
+# separate jobs because the boundary between them is a security boundary:
 #
-# The stages are separate jobs because the boundary between them is a security boundary:
+#   plan, lint, verify   this repository and the app's manifest; no app code, no secrets
+#   build                runs the app's build; app code, no secrets
+#   validate             reads what the build produced; no app code, no secrets
 #
-#   plan, verify   read this repository and the app's manifest; no app code, no secrets
-#   build          checks the app out and runs its build; app code, no secrets
-#   validate       reads what the build produced; no app code, no secrets
-#
-# The publish workflow adds a fourth stage that signs and uploads. It holds the secrets and, like
-# validate, runs none of the app's code.
+# publish.yml adds the signing stage, which holds the secrets and runs none of the app's code.
 name: pull request
 
 on:
@@ -27,8 +25,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Which submissions this pull request touches, and whether they are well formed. One job
-  # answers both, so a typo stops here instead of in a build matrix.
+  # Which submissions this pull request touches, and whether they are well formed, so a typo
+  # stops here instead of in a build matrix.
   plan:
     name: plan
     runs-on: ubuntu-latest
@@ -40,22 +38,21 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          # The whole history, so the diff against the base branch is possible at all.
+          # The whole history: the plan diffs against the base branch.
           fetch-depth: 0
-      - name: The catalog's own rules
+      - name: Run the catalog's selftest
         run: python3 scripts/queue.py selftest
-      - name: Every submission still parses
+      - name: Validate every submission
         run: python3 scripts/queue.py validate --all
-      - name: Plan the submissions this pull request changes
+      - name: Plan the changed submissions
         id: plan
         run: |
           set -euo pipefail
           git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
           python3 scripts/queue.py plan --changed-from "origin/${{ github.base_ref }}"
-      # Who is asking. Maintainership belongs to the app's repository, so this queries GitHub
-      # instead of keeping a list here. It warns and passes: the reviewer who merges decides, and
-      # a maintainer stepping in or an app changing hands are ordinary events.
-      - name: Does the author maintain the app?
+      # Maintainership belongs to the app's repository, so this asks GitHub rather than keeping
+      # a list here. It warns and passes; the reviewer who merges decides.
+      - name: Check the author's maintainership
         if: steps.plan.outputs.count != '0'
         env:
           MATRIX: ${{ steps.plan.outputs.matrix }}
@@ -67,16 +64,14 @@ jobs:
           print(' '.join(e['token'] for e in json.loads(os.environ['MATRIX'])['include']))
           ")
           [ -n "$TOKENS" ] || exit 0
-          # shellcheck disable=SC2086 # a deliberately word-split token list
+          # shellcheck disable=SC2086 # the tokens are separate arguments
           python3 scripts/queue.py authorize $TOKENS \
             --actor "${{ github.event.pull_request.user.login }}"
-      # What a reviewer needs to read before approving: the range between the commit that is
-      # published and the one this pull request proposes. The comment itself is posted by
-      # comment.yml, because a pull request from a fork gets a read-only token here.
-      - name: Summarize the source changes for a reviewer
+      # The range between the published commit and the proposed one, for the reviewer. Posted by
+      # comment.yml, since a fork pull request gets a read-only token here. A failure to write it
+      # leaves the checks alone.
+      - name: Summarize the source changes
         if: steps.plan.outputs.count != '0'
-        # The summary is for the reviewer to read, so a failure to write it leaves the checks
-        # alone.
         continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -85,7 +80,7 @@ jobs:
           python3 scripts/queue.py review --changed-from "origin/${{ github.base_ref }}" \
             --out review.md
           echo "${{ github.event.pull_request.number }}" > review-pr.txt
-      - name: Keep the summary for the comment job
+      - name: Upload the summary
         if: steps.plan.outputs.count != '0'
         uses: actions/upload-artifact@v7
         with:
@@ -94,9 +89,8 @@ jobs:
             review.md
             review-pr.txt
           if-no-files-found: ignore
-      # The label that lets a submission past a comparison it cannot pass. A maintainer adds it
-      # after finding out why the two builds differ, and the run records that it was used.
-      - name: Was the comparison waived?
+      # The label that waives a comparison a submission cannot pass. The run records its use.
+      - name: Read the waiver label
         id: label
         env:
           LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
@@ -109,10 +103,9 @@ jobs:
           print("allow=" + ("true" if override in labels else "false"))
           PY
 
-  # The app's repository against the rules every app here follows: the licence texts, the licence
-  # notice in each source file, and the flavor manifest carrying the identity it publishes under.
-  # The same action an app runs in its own CI (.github/actions/appfair-lint), so a maintainer who
-  # runs it there meets nothing new here. A full checkout, since the rules read the sources.
+  # The catalog's rules for an app's repository: the licence texts, the licence notice in each
+  # source file, the flavor manifest. Same action an app runs in its own CI. The checkout is full,
+  # since the rules read the sources.
   lint:
     name: lint ${{ matrix.token }}
     needs: plan
@@ -125,7 +118,7 @@ jobs:
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v7
-      - name: Check out ${{ matrix.repo }} at ${{ matrix.commit }}
+      - name: Check out ${{ matrix.repo }}
         uses: actions/checkout@v7
         with:
           repository: ${{ matrix.repo }}
@@ -137,8 +130,8 @@ jobs:
           path: app
           flavor: ${{ matrix.flavor }}
 
-  # Whether the app at that commit is the app the file claims. Only the app's manifest can say,
-  # so this job reads it through a sparse checkout that leaves the source behind.
+  # Whether the app at that commit is the app the file claims, read from its manifest through a
+  # sparse checkout that leaves the source behind.
   verify:
     name: verify ${{ matrix.token }}
     needs: plan
@@ -149,25 +142,25 @@ jobs:
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v7
-      - name: Does ${{ matrix.tag }} exist in ${{ matrix.repo }}?
+      - name: Resolve ${{ matrix.tag }} in ${{ matrix.repo }}
         run: |
           set -euo pipefail
-          # Checked before the checkout, so an unpushed tag or an unreadable repository is
-          # reported directly instead of appearing as a checkout failure.
+          # Before the checkout, so an unpushed tag or a private repository is reported as
+          # itself rather than as a checkout failure.
           if ! REF=$(git ls-remote --tags "https://github.com/${{ matrix.repo }}" "refs/tags/${{ matrix.tag }}" 2>&1); then
-            echo "::error file=apps/${{ matrix.token }}.yaml::cannot read https://github.com/${{ matrix.repo }} — an app in the catalog has to be public ($REF)"
+            echo "::error file=apps/${{ matrix.token }}.yaml::cannot read https://github.com/${{ matrix.repo }}; an app in the catalog has to be public ($REF)"
             exit 1
           fi
           if [ -z "$REF" ]; then
-            echo "::error file=apps/${{ matrix.token }}.yaml::${{ matrix.repo }} has no tag ${{ matrix.tag }} — tag the release before submitting it"
+            echo "::error file=apps/${{ matrix.token }}.yaml::${{ matrix.repo }} has no tag ${{ matrix.tag }}; tag the release before submitting it"
             exit 1
           fi
           echo "$REF"
-          # An annotated tag answers with its own object first and the commit under `^{}`, so
-          # take the peeled line when there is one. The pin check reads this.
+          # An annotated tag lists its object first and the commit under `^{}`; the pin check
+          # wants the peeled line.
           PEELED=$(git ls-remote --tags "https://github.com/${{ matrix.repo }}" "refs/tags/${{ matrix.tag }}^{}" | cut -f1)
           echo "TAG_COMMIT=${PEELED:-$(printf '%s' "$REF" | head -1 | cut -f1)}" >> "$GITHUB_ENV"
-      - name: Read the app's manifest paths from policy.yaml
+      - name: Read the manifest paths
         id: paths
         run: |
           set -euo pipefail
@@ -177,7 +170,7 @@ jobs:
           print("\n".join(yaml.safe_load(open("policy.yaml"))["app-data-paths"]))
           print("EOF")
           PY
-      - name: Check out the app's manifest at ${{ matrix.commit }}
+      - name: Check out the app's manifest
         uses: actions/checkout@v7
         with:
           repository: ${{ matrix.repo }}
@@ -189,27 +182,25 @@ jobs:
       - uses: daybrite/actions/.github/actions/setup-day-cli@main
         with:
           version: ${{ matrix.day_version }}
-      - name: Read the app's identity
+      - name: Read the app's metadata
         run: |
           set -euo pipefail
           FLAVOR="${{ matrix.flavor }}"
           # The catalog names a flavor; carrying one is the app's choice. Without
-          # `Day-<flavor>.toml` the manifest is read as it stands, which is then the identity
-          # the app publishes under.
+          # `Day-<flavor>.toml` the manifest is read as it stands.
           if [ -n "$FLAVOR" ] && [ -f "app-data/Day-$FLAVOR.toml" ]; then
             (cd app-data && "$DAY_BIN" --flavor "$FLAVOR" metadata --json) > metadata.json
           else
             (cd app-data && "$DAY_BIN" metadata --json) > metadata.json
           fi
           cat metadata.json
-      - name: Check it against the submission
+      - name: Verify the submission
         run: |
           python3 scripts/queue.py verify --app "${{ matrix.token }}" --metadata metadata.json \
             --tag-commit "${TAG_COMMIT:-}"
 
-  # Stage A. The one job here that runs code the app supplied: its build.rs, its Gradle and Xcode
-  # build phases, whatever its dependencies do while building. It gets no secrets, and what it
-  # produces is files.
+  # Stage A. The only job that runs the app's code: its build.rs, its Gradle and Xcode phases,
+  # its dependencies. No secrets reach it, and it produces files.
   build:
     name: build ${{ matrix.token }} ${{ matrix.target }}
     needs: [plan, lint, verify]
@@ -236,8 +227,8 @@ jobs:
           path: packages
           if-no-files-found: error
 
-  # Stage B. Reads what stage A produced, the release the maintainer published from the same tag,
-  # and the app's manifest. It runs on a runner that has never seen the app's source.
+  # Stage B, on a runner that never saw the app's source: what stage A produced, the maintainer's
+  # release of the same tag, and the app's manifest.
   validate:
     name: validate ${{ matrix.token }} ${{ matrix.target }}
     needs: [plan, build]

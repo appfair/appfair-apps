@@ -1,25 +1,20 @@
 name: Build a submitted app
 description: >-
-  Stage A. Check out an app at the commit a submission pins, lint it, and pack it unsigned for
-  one target. This is the only stage that runs code from the submitted app, and it runs without
-  secrets.
+  Stage A: check out an app at the pinned commit, lint it, and pack it unsigned for one target.
+  The only stage that runs the app's code, and it holds no secrets.
 
 inputs:
   repo:
     description: The app's repository, as owner/name.
     required: true
   ref:
-    description: >-
-      The commit to build. A submission pins one, so what a reviewer read and what gets built are
-      the same bytes even when the tag is moved afterwards.
+    description: The commit to build, which a submission pins so a moved tag changes nothing.
     required: true
   target:
     description: The Day target to build, such as ios-uikit or android-mdc.
     required: true
   flavor:
-    description: >-
-      The Day build flavor carrying the App Fair identity, used when the app carries its
-      manifest. An app that publishes under its own identity needs no flavor.
+    description: The build flavor carrying the App Fair identity, used when the app carries it.
     required: false
     default: appfair
   day-version:
@@ -34,7 +29,7 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Check out ${{ inputs.repo }} at ${{ inputs.ref }}
+    - name: Check out ${{ inputs.repo }}
       uses: actions/checkout@v7
       with:
         repository: ${{ inputs.repo }}
@@ -42,18 +37,15 @@ runs:
         path: app
         persist-credentials: false
 
-    - name: Which flavor this app builds
+    - name: Resolve the build flavor
       id: flavor
       shell: bash
       env:
         FLAVOR: ${{ inputs.flavor }}
       run: |
         set -euo pipefail
-        # The catalog names a flavor; carrying one is the app's choice. A flavor keeps the
-        # maintainer's own builds under the maintainer's own id, and an app whose Day.toml
-        # already states the identity it publishes under needs none. Without `Day-<flavor>.toml`
-        # the project builds exactly as it stands, which also means the two builds the
-        # comparison holds against each other have nothing to differ about.
+        # A flavor keeps the maintainer's builds under the maintainer's id. Without
+        # `Day-<flavor>.toml` the project builds as it stands.
         if [ -n "$FLAVOR" ] && [ -f "app/Day-$FLAVOR.toml" ]; then
           echo "args=--flavor $FLAVOR" >> "$GITHUB_OUTPUT"
           echo "building the $FLAVOR flavor"
@@ -62,7 +54,7 @@ runs:
           echo "building ${{ inputs.repo }} as it stands${FLAVOR:+ (it carries no Day-$FLAVOR.toml)}"
         fi
 
-    - name: The Rust targets ${{ inputs.target }} needs
+    - name: Select the Rust targets
       id: rust
       shell: bash
       run: |
@@ -77,7 +69,7 @@ runs:
       with:
         targets: ${{ steps.rust.outputs.targets }}
 
-    - name: Set up ${{ inputs.target }}
+    - name: Set up ${{ inputs.target }} dependencies
       uses: daybrite/actions/.github/actions/setup-day-deps@main
       with:
         target: ${{ inputs.target }}
@@ -88,18 +80,17 @@ runs:
       with:
         version: ${{ inputs.day-version }}
 
-    - name: Lint the project
+    - name: Run day lint
       working-directory: app
       shell: bash
       env:
         FLAVOR_ARGS: ${{ steps.flavor.outputs.args }}
       run: |
         set -euo pipefail
-        # `day lint` checks ids, strings, the manifest and the store listing, the same as the
-        # app's own CI.
+        # Ids, strings, the manifest and the store listing, as in the app's own CI.
         "$DAY_BIN" $FLAVOR_ARGS lint
 
-    - name: Pack ${{ inputs.target }}, unsigned
+    - name: Pack ${{ inputs.target }} unsigned
       working-directory: app
       shell: bash
       env:
@@ -108,8 +99,7 @@ runs:
         FLAVOR_ARGS: ${{ steps.flavor.outputs.args }}
       run: |
         set -euo pipefail
-        # `--no-sign` leaves the package unsigned. The App Fair's identity is applied in stage C,
-        # which does not run the app's code, and this job holds no keys.
+        # Unsigned: the signing happens in stage C, which holds the keys and runs no app code.
         "$DAY_BIN" $FLAVOR_ARGS pack \
           -p "${{ inputs.target }}" --no-sign --no-version-in-name --format json | tee "$RUNNER_TEMP/pack-${{ inputs.target }}.json"
 

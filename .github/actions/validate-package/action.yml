@@ -1,8 +1,8 @@
 name: Validate a built package
 description: >-
-  Stage B. Read the packages stage A produced, check them against the app's manifest and against
-  the release the app's own CI published from the same commit, and scan them. Every step reads
-  files; none runs the app's code, and no signing key is available to this job.
+  Stage B: check the packages stage A produced against the app's manifest and against the release
+  the app's CI published from the same commit, then scan them. Every step reads files; none runs
+  the app's code, and this job holds no keys.
 
 inputs:
   token:
@@ -21,9 +21,7 @@ inputs:
     description: The Day target these packages were built for.
     required: true
   flavor:
-    description: >-
-      The Day build flavor the catalog names, used when the app carries its manifest. An app
-      that publishes under its own identity needs no flavor.
+    description: The build flavor the catalog names, used when the app carries its manifest.
     required: false
     default: appfair
   packages:
@@ -35,9 +33,7 @@ inputs:
     required: false
     default: main
   allow-mismatch:
-    description: >-
-      Accept differences from the maintainer's release, for a re-run a maintainer has labelled
-      after understanding the cause.
+    description: Accept differences from the maintainer's release, for a labelled re-run.
     required: false
     default: "false"
   github-token:
@@ -47,9 +43,8 @@ inputs:
 runs:
   using: composite
   steps:
-    # The steps below read policy.yaml with PyYAML. Ubuntu runners ship a python3 that has it;
-    # macOS runners do not, and the first `import yaml` is where the job would otherwise stop.
-    - name: PyYAML for the queue's scripts
+    # macOS runners ship a python3 without PyYAML, which the steps below read policy.yaml with.
+    - name: Install PyYAML
       shell: bash
       run: |
         set -euo pipefail
@@ -60,9 +55,9 @@ runs:
         fi
         python3 -c "import sys, yaml; print('PyYAML', yaml.__version__, 'on python', sys.version.split()[0])"
 
-    # The app's manifest, store copy and translations, through a sparse checkout of the paths
-    # policy.yaml lists. Source and build scripts stay off this runner.
-    - name: Read the app's manifest paths from policy.yaml
+    # The manifest, store copy and translations only: policy.yaml lists the paths, and the
+    # source stays off this runner.
+    - name: Read the manifest paths
       id: paths
       shell: bash
       run: |
@@ -75,7 +70,7 @@ runs:
         print("EOF")
         PY
 
-    - name: Check out the app's manifest at ${{ inputs.ref }}
+    - name: Check out the app's manifest
       uses: actions/checkout@v7
       with:
         repository: ${{ inputs.repo }}
@@ -89,15 +84,14 @@ runs:
       with:
         version: ${{ inputs.day-version }}
 
-    - name: Which flavor this app builds
+    - name: Resolve the build flavor
       id: flavor
       shell: bash
       env:
         FLAVOR: ${{ inputs.flavor }}
       run: |
         set -euo pipefail
-        # Carrying a flavor is the app's choice: without `Day-<flavor>.toml` the manifest is
-        # read as it stands, which is the identity the app publishes under.
+        # Without `Day-<flavor>.toml` the manifest is read as it stands.
         if [ -n "$FLAVOR" ] && [ -f "app-data/Day-$FLAVOR.toml" ]; then
           echo "args=--flavor $FLAVOR" >> "$GITHUB_OUTPUT"
         else
@@ -105,19 +99,18 @@ runs:
           echo "reading ${{ inputs.repo }}'s manifest as it stands${FLAVOR:+ (it carries no Day-$FLAVOR.toml)}"
         fi
 
-    - name: What the app's manifest declares
+    - name: Read the app's metadata
       shell: bash
       env:
         FLAVOR_ARGS: ${{ steps.flavor.outputs.args }}
       run: |
         set -euo pipefail
-        # `day metadata` reads Day.toml, the flavor manifest and Cargo.toml. It builds nothing and
-        # runs nothing from the app.
+        # `day metadata` reads Day.toml, the flavor manifest and Cargo.toml, and runs nothing.
         (cd app-data && "$DAY_BIN" $FLAVOR_ARGS metadata --json) > metadata.json
         (cd app-data && "$DAY_BIN" metadata --json) > base-metadata.json
         python3 -c "import json;d=json.load(open('metadata.json'));p=d['project'];print('manifest:',p['id'],p['version'],p['build'])"
 
-    - name: Name the packages
+    - name: Select the packages
       id: pick
       shell: bash
       run: |
@@ -134,7 +127,7 @@ runs:
         echo "sibling=$sibling" >> "$GITHUB_OUTPUT"
         echo "ext=${primary##*.}" >> "$GITHUB_OUTPUT"
 
-    - name: What is inside it
+    - name: Inspect the package
       shell: bash
       run: |
         set -euo pipefail
@@ -143,22 +136,21 @@ runs:
           ${{ steps.pick.outputs.sibling && format('--sibling {0}', steps.pick.outputs.sibling) || '' }} \
           --out report.json
 
-    - name: The maintainer's release of the same tag
+    - name: Download the maintainer's release
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github-token }}
       run: |
         set -euo pipefail
         mkdir -p release
-        # The App Fair ships the build above. This downloads what the maintainer built from the
-        # same tag so the two can be compared; a release that carries no counterpart leaves the
-        # submission unverifiable, which the comparison step reports.
+        # What the maintainer built from the same tag, for the comparison below. A release
+        # without a counterpart leaves the submission unverifiable, which that step reports.
         if ! gh release download "${{ inputs.tag }}" --repo "${{ inputs.repo }}" \
              --pattern "*.${{ steps.pick.outputs.ext }}" --dir release 2>release.err; then
           echo "::warning::no ${{ steps.pick.outputs.ext }} asset on ${{ inputs.repo }} ${{ inputs.tag }}: $(cat release.err)"
         fi
-        # The provenance day writes beside each package. The comparison reads both sides' tool
-        # versions from these, which is what turns a differing file into a reason.
+        # The provenance sidecar day writes beside each package: the comparison reads both
+        # sides' tool versions from it.
         gh release download "${{ inputs.tag }}" --repo "${{ inputs.repo }}" \
           --pattern "*.${{ steps.pick.outputs.ext }}.buildinfo.json" --dir release 2>/dev/null \
           || echo "::warning::the release carries no buildinfo sidecar, so the two toolchains cannot be compared"
@@ -168,7 +160,7 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        # Select the base identity at the submitted commit, never whichever archive sorts first.
+        # By the base identity at the submitted commit, not whichever archive sorts first.
         theirs=$(python3 scripts/queue.py select-release --directory release \
           --metadata base-metadata.json --target "${{ inputs.target }}")
         python3 scripts/queue.py compare \
@@ -177,11 +169,11 @@ runs:
           --target "${{ inputs.target }}" \
           ${{ inputs.allow-mismatch == 'true' && '--allow-mismatch' || '' }}
 
-    - name: Hold it against the submission and the manifest
+    - name: Audit the package
       shell: bash
       run: |
         set -euo pipefail
-        # Every stage checked out the pinned commit, so the build's provenance has to name it.
+        # The build's provenance has to name the pinned commit every stage checked out.
         python3 scripts/queue.py audit \
           --app "${{ inputs.token }}" \
           --report report.json \
@@ -190,7 +182,7 @@ runs:
           --sidecars "${{ inputs.packages }}" \
           --expect-commit "${{ inputs.ref }}"
 
-    - name: Scan it
+    - name: Scan for malware
       shell: bash
       run: |
         set -euo pipefail
@@ -200,8 +192,7 @@ runs:
           exit 0
         fi
         if [ "$(uname -s)" = Darwin ]; then
-          # Homebrew installs freshclam.conf.sample and no config, so this writes one. Nothing
-          # confines where freshclam reads it from here.
+          # Homebrew installs freshclam.conf.sample and no config, so write one.
           brew list clamav >/dev/null 2>&1 || brew install clamav
           mkdir -p "$RUNNER_TEMP/clamav"
           printf 'DatabaseDirectory %s\nDatabaseMirror database.clamav.net\n' \
@@ -209,27 +200,24 @@ runs:
           freshclam --quiet --config-file="$RUNNER_TEMP/freshclam.conf"
           DATABASE="$RUNNER_TEMP/clamav"
         else
-          # Ubuntu's clamav-freshclam ships /etc/apparmor.d/usr.bin.freshclam, which lets
-          # freshclam read /etc/clamav/freshclam.conf and write /var/lib/clamav and nothing else.
-          # A config under RUNNER_TEMP is denied, and freshclam reports that as
-          # "Can't open/parse the config file", so the packaged pair is what this uses. clamscan
-          # carries no profile and reads the workspace.
+          # An AppArmor profile confines freshclam to /etc/clamav/freshclam.conf and
+          # /var/lib/clamav, so a config under RUNNER_TEMP is denied ("Can't open/parse the
+          # config file"). clamscan carries no profile and reads the workspace.
           sudo apt-get update -qq
           sudo apt-get install -y -qq clamav >/dev/null
           sudo systemctl stop clamav-freshclam 2>/dev/null || true
-          # A missing clamd.conf makes freshclam complain about notifying a daemon that is not
-          # installed, after the signatures have downloaded, so the database decides this.
+          # Without clamd.conf freshclam complains about notifying a daemon that is not
+          # installed, after the signatures download, so the database decides this.
           sudo freshclam --quiet || true
           DATABASE=/var/lib/clamav
           ls "$DATABASE"/main.c* >/dev/null 2>&1 || {
             echo "::error::freshclam downloaded no ClamAV database"; exit 1; }
         fi
-        # clamscan reads archives itself, so the packages are scanned where they lie and nothing
-        # is unpacked into a place anything might run it from.
+        # clamscan reads archives itself, so nothing is unpacked anywhere it could run.
         clamscan --database="$DATABASE" --recursive --infected --max-filesize=4000M --max-scansize=4000M "${{ inputs.packages }}"
 
-    # Kept whatever happened: a failing comparison is exactly when its report is wanted.
-    - name: Keep the reports
+    # Uploaded even on failure, which is when a comparison report is wanted.
+    - name: Upload the reports
       if: always()
       uses: actions/upload-artifact@v7
       with:

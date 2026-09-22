@@ -2,33 +2,28 @@
 # pull request. Changing what the App Fair accepts is an edit to this file.
 
 # The bundle-id namespace the App Fair publishes in
-# (https://appfair.org/docs/building/#bundle-id). Every id a submission resolves to has to start
-# with it, because this catalog is the publisher of record for what it uploads. What follows is
-# the app's own business: `<namespace><token>` is what a new app conventionally takes and what
-# the tooling proposes, and an app that came with records under another spelling keeps them. The
-# id itself comes from the build — the app's flavor manifest (`Day-<flavor>.toml`) is where an
-# app whose own builds go out under another id states it.
+# (https://appfair.org/docs/building/#bundle-id). Every id a submission resolves to starts with
+# it; what follows is the app's own. `<namespace><token>` is the convention for a new app. The id
+# comes from the build, and `Day-<flavor>.toml` in the app is where it is stated.
 id-namespace: org.appfair.app.
 
 # The app token: the name of the app's GitHub organization and repository, and the name of its
 # file under apps/. It does not change for the life of the app.
 token-pattern: '^[A-Za-z][A-Za-z0-9-]{1,38}$'
 
-# Submissions name a released tag, so that what is built is what the maintainer released and is
-# still there later. The tag also names the version: `verify` refuses a submission whose app
-# builds a version other than the one in the tag.
+# Submissions name a released tag, so what is built is what the maintainer released. The tag also
+# names the version: `verify` refuses an app that builds another one.
 tag-pattern: '^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$'
 
 # ...and the commit that tag pointed at when the submission was written. Tags can be moved, so
 # every stage checks out the commit and compares the tag against it.
 commit-pattern: '^[0-9a-f]{40}$'
 
-# The channels an app can be published to. A submission lists its channels under the target that
-# builds for them, and a target can feed more than one channel.
+# The channels an app can be published to, listed in a submission under the target that builds
+# for them. A target can feed more than one channel.
 #
-# Publishing means asking the store to review the build and distribute it. `lane` is what a
-# submission runs, and it is the lane that submits; `hold-lane` is the exception, for a submission
-# that sets `submit: false` and wants the build uploaded and left alone.
+# `lane` submits the build for review and distribution. `hold-lane` uploads without submitting,
+# for a submission that sets `submit: false`.
 #
 #   target        the Day target whose package this channel takes
 #   lane          the fastlane lane that submits it for review and distribution
@@ -63,19 +58,15 @@ channels:
     options: [submit]
     status: planned
 
-# The Day build flavor a submission is built with when the app carries one. It defaults to this
-# repository's name without the `-apps` suffix, so `appfair-apps` builds each app's `appfair`
-# flavor and a fork called `gamesfair-apps` builds `gamesfair` with no edit here. The flavor's
-# manifest (`Day-<flavor>.toml` in the app) carries the identity the app is published under, for
-# an app whose own builds go out under another. An app without that file is built as it stands.
+# The Day build flavor a submission is built with when the app carries one. Defaults to this
+# repository's name without the `-apps` suffix, so a fork called `gamesfair-apps` builds each
+# app's `gamesfair` flavor. An app without `Day-<flavor>.toml` is built as it stands.
 #
 # flavor: appfair
 
-# The runner each target builds and validates on. It has to match what the app's own CI used,
-# because the comparison holds the two builds against each other: a different runner image means
-# a different Xcode, a different SDK, and an Info.plist and binary that cannot agree. `xcode-27`
-# is the floor daybrite/actions builds every app on, which is what publishes the release this
-# queue compares against.
+# The runner each target builds and validates on. It matches what the app's CI used: another
+# runner image means another Xcode and SDK, and an Info.plist that cannot agree. `xcode-27` is
+# the floor daybrite/actions builds on.
 runners:
   ios-uikit: xcode-27
   android-mdc: ubuntu-latest
@@ -84,14 +75,11 @@ runners:
 day-version: main
 
 # --- The reviewer's summary ------------------------------------------------------------------
-# An update moves the tag and the commit a submission pins. The pull-request checks work out the
-# range between the commit already published and the proposed one, and post it as a comment, so a
-# reviewer can read the source changes going into the release before approving it.
+# The pull-request checks work out the range between the published commit and the proposed one
+# and post it as a comment, so a reviewer reads the source changes before approving.
 review:
-  # Paths worth opening first in that range: what runs during a build, what pulls in a dependency,
-  # and what decides the app's identity or permissions. Anything matching is listed in the
-  # comment; everything else is behind the compare link. Patterns are matched with fnmatch, where
-  # `*` also crosses directory separators.
+  # The paths to open first: what runs during a build, what pulls in a dependency, and what sets
+  # the app's identity or permissions. Matched with fnmatch, where `*` crosses directories.
   highlight-paths:
     - "Cargo.toml"
     - "*/Cargo.toml"
@@ -112,29 +100,25 @@ review:
   # How many of those paths the comment lists before it says how many are left.
   max-highlights: 20
 
-# App Store provisioning profiles are issued per bundle id. The signing stage requests one during
-# the run with `fastlane sigh`, against the certificate that will sign the package, so none are
-# stored here. An app that needs a particular profile names the secret holding it in its own
-# `apple-app-store: profile-secret`.
+# App Store profiles are issued per bundle id. The signing stage requests one during the run with
+# `fastlane sigh`, so none are stored here. An app that needs a particular profile names the
+# secret holding it in its `apple-app-store: profile-secret`.
 
 # --- Stage B -------------------------------------------------------------------------------
-# Stage B reads the packages stage A built and compares them with the app's own release of the
-# same commit. It does not execute anything it reads.
+# Reads the packages stage A built and compares them with the app's release of the same commit.
+# Nothing it reads is executed.
 
 # Extra paths to ignore when comparing. Signature directories are already excluded.
 ignore-in-comparison:
   - "*.kotlin_module"
   - "stamp-cert-sha256"
 
-# Paths allowed to differ between the two builds. Where a flavor states a different display name,
-# day compiles that name into the app through `day_build::app_title()`, so the native code a
-# flavor build produces cannot match the base release byte for byte. An app with no flavor builds
-# from one manifest and matches everywhere; these allowances simply go unused. A difference in one of these
-# is reported and passes; a difference anywhere else — another file, a changed asset, different
-# DEX, an extra library — still counts.
+# Paths allowed to differ between the two builds. Where a flavor states another display name, day
+# compiles it into the binary through `day_build::app_title()`, so that file cannot match byte
+# for byte. A difference here is reported and passes; anywhere else it still counts.
 #
-# Patterns are matched with fnmatch against the comparison's keys, where the iOS bundle is keyed
-# as `Payload/App.app` and its main binary as `<executable>`.
+# Matched with fnmatch against the comparison's keys, where the iOS bundle is keyed as
+# `Payload/App.app` and its main binary as `<executable>`.
 expected-differences:
   - "base/lib/*/libdayapp.so"
   - "Payload/App.app/<executable>"
@@ -148,9 +132,8 @@ override-label: allow-mismatch
 # Scan every file in the package with ClamAV before signing it.
 virus-scan: true
 
-# Permissions the framework and its pieces add to every app, which no app manifest declares.
-# `{id}` stands for the application id. Anything beyond this list and the app's own declarations
-# is reported.
+# Permissions the framework adds to every app, which no app manifest declares. `{id}` stands for
+# the application id. Anything beyond this list and the app's declarations is reported.
 baseline-permissions:
   android:
     - android.permission.INTERNET

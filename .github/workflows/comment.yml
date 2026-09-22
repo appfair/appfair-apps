@@ -1,9 +1,6 @@
-# Posting the reviewer's summary on a pull request.
-#
-# pr.yml runs on `pull_request`, where a pull request opened from a fork gets a read-only token,
-# so it cannot comment. This workflow runs after it, from the base branch, with a token that can.
-# It downloads the summary that run produced and posts it. Nothing from the pull request is
-# checked out here and none of its code runs.
+# Posts the review summary pr.yml produced. That workflow runs with a read-only token on a fork
+# pull request, so the comment is posted here instead, from the base branch. Nothing from the
+# pull request is checked out and none of its code runs.
 name: review comment
 
 on:
@@ -21,7 +18,7 @@ jobs:
     if: github.event.workflow_run.event == 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - name: Take the summary from the pull request's run
+      - name: Download the summary
         id: fetch
         continue-on-error: true
         uses: actions/download-artifact@v8
@@ -31,8 +28,8 @@ jobs:
           github-token: ${{ github.token }}
           path: review
 
-      # No artifact means the pull request changed no submission, and there is nothing to say.
-      - name: Post it, or rewrite the one already there
+      # No artifact: the pull request changed no submission.
+      - name: Post or update the comment
         if: steps.fetch.outcome == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -48,9 +45,8 @@ jobs:
             echo "::error::the summary is empty"
             exit 1
           fi
-          # One comment per pull request, found by the marker the summary begins with and
-          # rewritten on every push, so the thread holds the current range and not a history of
-          # every force-push.
+          # One comment per pull request, found by the marker the summary starts with and
+          # rewritten on every push.
           EXISTING=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
             --jq '.[] | select(.body | startswith("<!-- appfair-review -->")) | .id' | head -1)
           if [ -n "$EXISTING" ]; then

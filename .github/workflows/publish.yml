@@ -1,15 +1,13 @@
-# Merging a submission publishes it, through the three stages the pull request ran plus a fourth:
+# Merging a submission publishes it: the pull request's stages, plus signing and upload.
 #
-#   plan, verify   read this repository and the app's manifest. No app code, no secrets.
-#   build          checks the app out and runs its build. App code, no secrets.
+#   plan, verify   this repository and the app's manifest. No app code, no secrets.
+#   build          runs the app's build. App code, no secrets.
 #   validate       reads what the build produced. No app code, no secrets.
-#   publish        signs that package and hands it to the store. Secrets, and no app code.
+#   publish        signs that package and uploads it. Secrets, no app code.
 #
-# The job that builds a submitted app has no access to the keys, and the job that holds the keys
-# does not run the app's code: it re-signs an archive and uploads it.
-#
-# Merging is the approval, so this workflow asks for none. Branch protection on `main` and
-# CODEOWNERS on `apps/` decide who can start a run.
+# The build job holds no keys, and the job that holds the keys re-signs an archive rather than
+# running the app's code. Merging is the approval: branch protection on `main` and CODEOWNERS on
+# `apps/` decide who can start a run.
 name: publish
 
 on:
@@ -26,7 +24,7 @@ on:
       channel:
         description: >-
           Publish to this channel alone, such as google-play-store. Empty publishes to every
-          channel the submission names, which is what a merge does.
+          channel the submission names, as a merge does.
         required: false
         type: string
       lane:
@@ -58,9 +56,9 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - name: The catalog's own rules
+      - name: Run the catalog's selftest
         run: python3 scripts/queue.py selftest
-      - name: Plan what this merge publishes
+      - name: Plan what to publish
         id: plan
         run: |
           set -euo pipefail
@@ -83,16 +81,16 @@ jobs:
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v7
-      - name: Where does ${{ matrix.tag }} point now?
+      - name: Resolve ${{ matrix.tag }}
         run: |
           set -euo pipefail
           # A tag can move between the review and the merge. The build follows the pinned commit
-          # either way, and the check below reports the move.
+          # either way; the check below reports the move.
           PEELED=$(git ls-remote --tags "https://github.com/${{ matrix.repo }}" "refs/tags/${{ matrix.tag }}^{}" | cut -f1)
           PLAIN=$(git ls-remote --tags "https://github.com/${{ matrix.repo }}" "refs/tags/${{ matrix.tag }}" | cut -f1)
           echo "TAG_COMMIT=${PEELED:-$PLAIN}" >> "$GITHUB_ENV"
           echo "${{ matrix.tag }} → ${PEELED:-$PLAIN}"
-      - name: Read the app's manifest paths from policy.yaml
+      - name: Read the manifest paths
         id: paths
         run: |
           set -euo pipefail
@@ -102,7 +100,7 @@ jobs:
           print("\n".join(yaml.safe_load(open("policy.yaml"))["app-data-paths"]))
           print("EOF")
           PY
-      - name: Check out the app's manifest at ${{ matrix.commit }}
+      - name: Check out the app's manifest
         uses: actions/checkout@v7
         with:
           repository: ${{ matrix.repo }}
@@ -114,19 +112,18 @@ jobs:
       - uses: daybrite/actions/.github/actions/setup-day-cli@main
         with:
           version: ${{ matrix.day_version }}
-      - name: Read the app's identity
+      - name: Read the app's metadata
         run: |
           set -euo pipefail
           FLAVOR="${{ matrix.flavor }}"
           # The catalog names a flavor; carrying one is the app's choice. Without
-          # `Day-<flavor>.toml` the manifest is read as it stands, which is then the identity
-          # the app publishes under.
+          # `Day-<flavor>.toml` the manifest is read as it stands.
           if [ -n "$FLAVOR" ] && [ -f "app-data/Day-$FLAVOR.toml" ]; then
             (cd app-data && "$DAY_BIN" --flavor "$FLAVOR" metadata --json) > metadata.json
           else
             (cd app-data && "$DAY_BIN" metadata --json) > metadata.json
           fi
-      - name: Check it against the submission
+      - name: Verify the submission
         run: |
           python3 scripts/queue.py verify --app "${{ matrix.token }}" --metadata metadata.json \
             --tag-commit "${TAG_COMMIT:-}"
@@ -187,8 +184,8 @@ jobs:
           allow-mismatch: ${{ inputs.allow-mismatch && 'true' || 'false' }}
           github-token: ${{ github.token }}
 
-  # Stage C: signing and upload. This is the only job that can reach the secrets, and it runs the
-  # day CLI, fastlane and the platform signing tools over an archive.
+  # Stage C: signing and upload. The only job that reaches the secrets, running the day CLI,
+  # fastlane and the platform signing tools over an archive.
   publish:
     name: publish ${{ matrix.token }} → ${{ matrix.channel }}
     needs: [plan, validate]
@@ -199,8 +196,7 @@ jobs:
       contents: read
     strategy:
       fail-fast: false
-      # One submission at a time, so two merges in a minute cannot race each other into one
-      # store record.
+      # One at a time, so two merges cannot race into one store record.
       max-parallel: 1
       matrix: ${{ fromJSON(needs.plan.outputs.publish-matrix) }}
     steps:
@@ -230,20 +226,19 @@ jobs:
           # The name on the catalog's certificate. Apple has issued both "iPhone Distribution"
           # and "Apple Distribution" certificates over the years, and codesign matches the name.
           apple-identity: ${{ secrets.DAY_APPLE_IDENTITY || 'Apple Distribution' }}
-          # The app id a profile is issued for, and the team that issues it. With these, the
-          # profile is generated at signing time from the App Store Connect key, so the catalog
-          # stores none.
+          # The fallback app id for the profile request, and the team that issues it. The id
+          # published under comes from the app's manifest; the profile is issued during the run.
           app-id: ${{ matrix.app_id }}
           apple-team: ${{ secrets.DAY_APPLE_TEAM }}
-          # Empty for nearly every app: a profile is issued during the run. An app that needs a
-          # particular one names the secret holding it in its submission.
+          # Empty for nearly every app. One that needs a particular profile names the secret
+          # holding it in its submission.
           apple-profile-b64: ${{ matrix.profile_secret != '' && secrets[matrix.profile_secret] || '' }}
           asc-api-key-b64: ${{ secrets.APPLE_APPSTORE_APIKEY }}
           asc-key-id: ${{ secrets.DAY_ASC_KEY_ID }}
           asc-issuer: ${{ secrets.DAY_ASC_ISSUER }}
           asc-key-b64: ${{ secrets.DAY_ASC_KEY_B64 }}
 
-  # Record the publication in the repository, so the catalog's state is a file.
+  # The catalog's state is a file in this repository.
   record:
     name: record ${{ matrix.token }}
     needs: [plan, publish]
@@ -260,7 +255,7 @@ jobs:
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v7
-      - name: Write the publication into state/published.json
+      - name: Record the publication
         run: |
           set -euo pipefail
           python3 scripts/queue.py record \
@@ -268,13 +263,13 @@ jobs:
             --tag "${{ matrix.tag }}" \
             --channels "${{ matrix.channels }}" \
             --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-      - name: Commit it
+      - name: Commit the record
         run: |
           set -euo pipefail
           git config user.name "appfair-bot"
           git config user.email "bot@appfair.org"
           git add state/published.json
           git diff --cached --quiet && { echo "nothing changed"; exit 0; }
-          # `paths: apps/**` on this workflow keeps this commit from starting another run.
+          # `paths: apps/**` above keeps this commit from starting another run.
           git commit -m "Record ${{ matrix.token }} ${{ matrix.tag }} as published"
           git push origin HEAD:main

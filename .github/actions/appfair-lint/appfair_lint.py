@@ -1,21 +1,15 @@
 #!/usr/bin/env python3
-"""The checks an App Fair app's own repository has to pass, before the catalog builds it.
+"""The checks an App Fair app's repository has to pass, run by the action beside this file.
 
-What this is for: an app is easiest to fix while its maintainer is looking at it, so the same
-rules the submission checks apply run in the app's own CI — `.github/actions/appfair-lint`, which
-this script is the whole of. A failure names the file, the line, what is wrong with it and the
-exact text that fixes it.
+A failure names the file, the line, what is wrong and the text that fixes it. Every rule runs,
+so one push reports every problem. `--list` prints the rules, `--only` and `--skip` select them,
+and `--format json` returns the findings.
 
 Adding a rule is one function:
 
     @rule("store-listing", "The store listing carries every field the App Store takes")
     def store_listing(project: Project) -> Iterable[Finding]:
         ...yield Finding(...)
-
-Rules see a `Project` (its root, the flavor name, and the reference material shipped beside this
-file), return findings, and never stop the run themselves: every rule is asked, so one pull
-request shows every problem rather than the first. `--list` prints them, `--only` / `--skip`
-select them, and `--format json` is for a caller that wants the findings rather than the text.
 """
 
 from __future__ import annotations
@@ -32,8 +26,8 @@ from typing import Callable, Iterable
 HERE = Path(__file__).resolve().parent
 REFERENCE = HERE / "reference"
 
-# Directories a walk never descends into: build output, dependency trees, and the host projects'
-# own generated state. A rule that needs one of these asks for it by path.
+# Build output and dependency trees, which no walk descends into. A rule that needs one of these
+# asks for it by path.
 SKIP_DIRS = {
     ".git",
     ".gradle",
@@ -46,19 +40,17 @@ SKIP_DIRS = {
     "vendor",
 }
 
-# The licence every app in the catalog ships under, and the line that says so in a source file.
+# The licence every app here ships under, and the line that says so in a source file.
 SPDX = "AGPL-3.0-only WITH App-Fair-Distribution-Exception"
 SPDX_LINE = f"// SPDX-License-Identifier: {SPDX}"
-# How far into a file the notice may sit: a shebang, an attribute, or a blank line may precede it.
+# How far in the notice may sit, so a shebang or an attribute can precede it.
 SPDX_WITHIN = 5
 
 
 @dataclass(frozen=True)
 class Finding:
-    """One problem, in the words the person who has to fix it needs.
-
-    `message` says what is wrong with this file; `fix` says what to do about it, literally enough
-    to paste. `path` is relative to the project, and `line` is 1-based where a rule knows one.
+    """One problem: what is wrong (`message`) and what to do about it (`fix`, literal enough to
+    paste). `path` is relative to the project, `line` is 1-based where a rule knows one.
     """
 
     rule: str
@@ -92,10 +84,8 @@ class Project:
             return str(path)
 
     def sources(self, suffix: str) -> list[Path]:
-        """Every file with `suffix` the app owns, in a stable order.
-
-        A walk rather than `git ls-files`, so the rules hold for a source tree that arrived as a
-        tarball or a sparse checkout as well as for a clone.
+        """Every file with `suffix`, in a stable order. A walk rather than `git ls-files`, so a
+        tarball or a sparse checkout is checked like a clone.
         """
         found: list[Path] = []
         for dirpath, dirnames, filenames in os.walk(self.root):
@@ -144,7 +134,7 @@ def rule(code: str, summary: str) -> Callable[[Check], Check]:
 
 @rule("day-project", "The repository holds a Day project")
 def day_project(project: Project) -> Iterable[Finding]:
-    """Everything else reads this manifest, so an absent one is reported first and plainly."""
+    """Every other rule reads this manifest."""
     if not project.path("Day.toml").is_file():
         yield Finding(
             "day-project",
@@ -156,10 +146,8 @@ def day_project(project: Project) -> Iterable[Finding]:
 
 @rule("flavor-manifest", "The App Fair identity lives in its own flavor manifest")
 def flavor_manifest(project: Project) -> Iterable[Finding]:
-    """`Day-appfair.toml` is how an app keeps its own id separate from the published one.
-
-    The catalog builds, lints, signs and uploads every submission through this flavor, so the ids
-    it states are the ids the stores receive.
+    """The catalog builds, signs and uploads through this flavor, so the ids it states are the
+    ids the stores receive.
     """
     name = f"Day-{project.flavor}.toml"
     if project.path(name).is_file():
@@ -178,7 +166,7 @@ def flavor_manifest(project: Project) -> Iterable[Finding]:
 
 
 def _compare_to_reference(project: Project, name: str, code: str, what: str) -> Iterable[Finding]:
-    """One licence file against the copy this action ships, reported by the first line that differs."""
+    """One licence file against the copy this action ships, by the first line that differs."""
     reference = project.reference / name
     expected = reference.read_text(encoding="utf-8")
     path = project.path(name)
@@ -223,7 +211,7 @@ def _compare_to_reference(project: Project, name: str, code: str, what: str) -> 
 
 @rule("license", "LICENSE.txt is the GNU AGPL 3.0 text")
 def license_text(project: Project) -> Iterable[Finding]:
-    """The catalog publishes free software, and the licence is the unmodified AGPL."""
+    """The catalog publishes free software under the unmodified AGPL."""
     yield from _compare_to_reference(project, "LICENSE.txt", "license", "the AGPL-3.0 text")
 
 
@@ -240,7 +228,7 @@ def license_exception(project: Project) -> Iterable[Finding]:
 
 @rule("spdx-headers", "Every Rust source names the licence it is under")
 def spdx_headers(project: Project) -> Iterable[Finding]:
-    """A file without the notice is a file whose licence has to be guessed from the repository."""
+    """A file without the notice leaves its licence to be guessed from the repository."""
     for path in project.sources(".rs"):
         text = project.read(path)
         if text is None:
@@ -269,8 +257,8 @@ class Report:
 
 
 def run(project: Project, only: list[str] | None = None, skip: list[str] | None = None) -> Report:
-    """Every selected rule, in registration order. A rule that raises is a finding of its own,
-    so one broken rule cannot hide the others."""
+    """Every selected rule, in registration order. A rule that raises becomes a finding, so a
+    broken rule cannot hide the others."""
     report = Report()
     for code, entry in RULES.items():
         if only and code not in only:
@@ -288,7 +276,7 @@ def run(project: Project, only: list[str] | None = None, skip: list[str] | None 
 
 
 def emit(report: Report, annotate: bool) -> None:
-    """The findings, for a person and (in Actions) for the file view."""
+    """The findings as text, plus annotations when this runs in Actions."""
     for finding in report.findings:
         where = finding.where()
         head = f"{finding.rule}: {finding.message}"
@@ -299,7 +287,7 @@ def emit(report: Report, annotate: bool) -> None:
             location = ""
             if finding.path:
                 location = f" file={finding.path}" + (f",line={finding.line}" if finding.line else "")
-            flat = re.sub(r"\s+", " ", f"{head} — fix: {finding.fix}")
+            flat = re.sub(r"\s+", " ", f"{head}. Fix: {finding.fix}")
             print(f"::error{location}::{flat}")
     rules = ", ".join(report.checked)
     if report.findings:

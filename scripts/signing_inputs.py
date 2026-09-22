@@ -1,7 +1,7 @@
 """Adapt the signing stage's inputs, whichever secret carries them.
 
-The organization holds some of its keys as bundles — a Java properties file with the keystore's
-alias and passwords, a fastlane key file with the App Store Connect id, issuer and key — and the
+The organization holds some of its keys as bundles (a Java properties file with the keystore's
+alias and passwords, a fastlane key file with the App Store Connect id, issuer and key), and the
 queue also takes each field on its own. This reads whichever is present, with an explicit field
 winning over the bundle that duplicates it, and hands the signing steps one set of names.
 

@@ -207,11 +207,10 @@ def payload(path, metadata=None, target=None, aapt2=None, origins=None):
 
 
 def describe_difference(ours, theirs, ours_name, theirs_name, ours_app=None, theirs_app=None):
-    """Why one path differs, in the terms the file itself is written in.
+    """Why one path differs, in the terms of the file itself.
 
-    A property list is compared key by key after normalization, which is what turns "Info.plist
-    differs" into "these two builds used different Xcode versions". Anything else reports its
-    size, since its bytes are not for reading.
+    A property list is compared key by key after normalization, so "Info.plist differs" becomes
+    "these two builds used different Xcode versions". Anything else reports its size.
     """
     lines = []
     with zipfile.ZipFile(ours) as one, zipfile.ZipFile(theirs) as two:

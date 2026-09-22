@@ -460,9 +460,9 @@ def app_channels(app: App, policy: Policy) -> list[tuple[str, Channel]]:
 def published_id(app: App, policy: Policy) -> str:
     """The bundle id this app publishes under.
 
-    Whatever the submission states, and `<namespace><token>` when it states nothing — the
-    convention a new app follows, not a rule about what an id may be. An app keeps the id its
-    store records were created under by writing it here, and any valid id is a valid answer.
+    Whatever the submission states, and `<namespace><token>` when it states nothing. That is the
+    convention a new app follows, not a rule: an app keeps the id its store records were created
+    under by writing it here.
     """
     declared = str(app.data.get("id") or "").strip()
     return declared or f"{policy.id_namespace}{app.token}"
@@ -652,18 +652,16 @@ def cmd_verify(args: argparse.Namespace) -> int:
     def bad(message: str) -> None:
         problems.append(Problem(rel, message))
 
-    # The id an app publishes under is the app's own: whatever its manifest states, the stores
-    # accept, and no other submission has claimed. The catalog does not derive it from the token
-    # and does not require it to be written here — every stage that needs it reads it from the
-    # build. A submission that DOES state `id` / `android-id` pins it, and then a build that
-    # changed the record it publishes to is caught here rather than at the store.
+    # The id is the app's: whatever its manifest states, the stores accept, and no other
+    # submission has claimed. Stating `id` / `android-id` pins it, so a build that changed the
+    # record it publishes to fails here rather than at the store.
     android = project.get("resolved", {}).get("android-mdc", {})
     built_ids = {"id": resolved_id, "android-id": android.get("id", "")}
 
     # The App Fair is the publisher of record for what it uploads, so every id a submission
     # resolves to is inside its namespace; what follows the namespace is the app's own business.
     # An app whose own builds go out under another id puts these in its flavor manifest
-    # (`Day-<flavor>.toml`), which is what the queue reads.
+    # (`Day-<flavor>.toml`), which the queue reads.
     for field, value in built_ids.items():
         if not value or (field == "android-id" and "android-mdc" not in app.data.get("distribution", {})):
             continue
@@ -767,7 +765,7 @@ def remote_tags(repo_url: str) -> list[str]:
     if out.returncode != 0:
         detail = out.stderr.strip().splitlines()[-1] if out.stderr.strip() else "unreadable"
         if "could not read Username" in detail or "Authentication failed" in detail:
-            detail = "no public repository there — check the token, which is the repository name"
+            detail = "no public repository there; the token is the repository name"
         raise RuntimeError(f"{repo_url}: {detail}")
     names = set()
     for line in out.stdout.splitlines():
@@ -897,13 +895,11 @@ def submission_text(token: str, title: str, tag: str, commit: str, policy: Polic
     )
     return f"""# yaml-language-server: $schema=../schema/app.schema.json
 #
-# {title} in the App Fair catalog.
+# {title} in the App Fair catalog. The file is named for the app token, which is where the app
+# lives: https://github.com/{token}/{token}
 #
-# The file is named for the app token, which is also where the app lives:
-# https://github.com/{token}/{token}
-#
-# To publish a new version, open a pull request that changes the tag and the commit below. The
-# rest is read from the app's repository at that commit.
+# To publish a new version, change the tag and the commit below in a pull request. The rest is
+# read from the app's repository at that commit.
 
 token: {token}
 title: {title}
@@ -1090,7 +1086,7 @@ def review_section(
     title = " ".join(str(data.get("title", app.token)).split()).replace("`", "'")
     tag = str(data.get("tag", ""))
     commit = str(data.get("commit", ""))
-    lines = [f"### {title} — `{app.token}`", ""]
+    lines = [f"### {title} (`{app.token}`)", ""]
 
     if previous is None:
         lines += [
@@ -1129,7 +1125,7 @@ def review_section(
     if stats:
         count = stats["total_commits"] or stats["commits"]
         lines[-2] += (
-            f" — {count} commit(s), {stats['file_count']} file(s), "
+            f": {count} commit(s), {stats['file_count']} file(s), "
             f"+{stats['additions']} −{stats['deletions']}"
         )
         if stats["file_count"] >= 100:
@@ -1140,7 +1136,7 @@ def review_section(
             lines += [f"- `{name}`" for name in picked]
             if rest:
                 lines.append(f"- …and {rest} more")
-        # GitHub answers `ahead` when the proposed commit simply continues the published one.
+        # GitHub answers `ahead` when the proposed commit continues the published one.
         # Anything else is worth a reviewer's attention before the range is read.
         warning = {
             "diverged": f"**The two commits have diverged.** {stats['behind_by']} commit(s) in"

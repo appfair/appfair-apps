@@ -1,10 +1,8 @@
 <!--
-Thank you for submitting to the App Fair catalog.
+One app per pull request, one file under apps/. The checks run as soon as you open it; the list
+below is for the maintainer reviewing it.
 
-A pull request covers one app and changes one file under apps/. The checks run as soon as you
-open it; the list below is for the maintainer reviewing the change.
-
-There are two narrower templates:
+Two narrower templates:
   ?template=new-app.md   a first submission
   ?template=update.md    a new version of an app already in the catalog
 -->
@@ -27,13 +25,13 @@ There are two narrower templates:
       to publish.
 - [ ] Its release carries the packages the app's CI built (`.aab`, `.ipa`), which the App Fair's
       own build is compared against.
-- [ ] The app builds under `org.appfair.app.<token>`: its `Day-appfair.toml` states that bundle
-      id, and the version and build number climb past what the stores already have.
+- [ ] The app builds under an `org.appfair.app.` id stated in its `Day-appfair.toml`, and the
+      version and build number climb past what the stores already have.
 - [ ] The app meets the [inclusion criteria](https://appfair.org/docs/inclusion-criteria/).
 - [ ] The app is free of advertising, tracking, analytics, gambling and cryptocurrency.
 - [ ] The store listing in the app's repository (`store/`, or the flavor's `store-<name>/`) is
       current: title, description, keywords, screenshots, release notes.
-- [ ] I maintain this app — I have write access to its repository, or its maintainers know this
+- [ ] I maintain this app: I have write access to its repository, or its maintainers know this
       submission is coming.
 
 ## For a first submission

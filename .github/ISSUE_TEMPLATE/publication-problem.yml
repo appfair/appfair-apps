@@ -24,7 +24,7 @@ body:
         - The build
         - The App Store upload
         - The Google Play upload
-        - After upload — a store rejected the binary
+        - After upload (a store rejected the binary)
     validations:
       required: true
   - type: textarea

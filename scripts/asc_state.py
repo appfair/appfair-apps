@@ -2,9 +2,9 @@
 
 An upload and a submission are different things. `deliver` can finish happily having sent a
 binary while the version it belongs to sits in Prepare for Submission with no build attached,
-which is what the App Store Connect web page shows: an empty version. This reads the two records
-that decide whether a release is really on its way — the build and the version — and fails when
-they do not say what the run claimed.
+which the App Store Connect page shows as an empty version. This reads the two records
+that decide whether a release is on its way, the build and the version, and fails when they do
+not say what the run claimed.
 
 The key comes from the environment (APPFAIR_ASC_KEY_ID, APPFAIR_ASC_ISSUER, APPFAIR_ASC_KEY_PATH)
 and is never printed. Nothing here writes to App Store Connect.
@@ -110,7 +110,7 @@ def judge(version: dict | None, builds: list[dict], build_number: str, submitted
             )
     elif attached_number != build_number:
         lines.append(
-            "the lane uploaded without submitting, so the version carries no build yet — set "
+            "the lane uploaded without submitting, so the version carries no build yet. Set "
             "`submit: true` under the channel to have a run finish the job"
         )
     return not problems, lines, problems

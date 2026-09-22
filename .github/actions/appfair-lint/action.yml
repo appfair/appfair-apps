@@ -1,16 +1,13 @@
-# The checks an App Fair app's repository has to pass, as an action its own CI can run.
-#
-# The catalog runs these on every submission (workflows/pr.yml). An app runs the same rules on
-# every push by calling this action, so a problem is found where it is cheap to fix:
+# The catalog's rules for an app's repository, as an action the app's own CI can run:
 #
 #     - uses: appfair/appfair-apps/.github/actions/appfair-lint@main
 #
-# `scripts/test_appfair_lint.py` in this repository covers the rules; `appfair_lint.py --list`
-# prints them.
+# pr.yml runs the same action on every submission. `appfair_lint.py --list` prints the rules;
+# scripts/test_appfair_lint.py covers them.
 name: App Fair lint
 description: >-
-  Check an app against the App Fair's rules: the licence texts, the per-file licence notices, and
-  the flavor manifest carrying the identity the catalog publishes it under.
+  Check an app against the App Fair's rules: the licence texts, the licence notice in each source
+  file, and the flavor manifest holding the ids it publishes under.
 
 inputs:
   path:
@@ -36,8 +33,7 @@ runs:
     - name: appfair-lint
       shell: bash
       env:
-        # Passed through the environment rather than interpolated into the script, so a value
-        # from a caller's workflow cannot become part of the command.
+        # Through the environment, not interpolated, so a caller's value cannot join the command.
         LINT_PATH: ${{ inputs.path }}
         LINT_FLAVOR: ${{ inputs.flavor }}
         LINT_ONLY: ${{ inputs.only }}
