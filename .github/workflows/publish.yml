@@ -4,6 +4,7 @@
 #   build          runs the app's build. App code, no secrets.
 #   validate       reads what the build produced. No app code, no secrets.
 #   publish        signs that package and uploads it. Secrets, no app code.
+#   attach         keeps the signed packages as an artifact and puts them on the app's release.
 #
 # The build job holds no keys, and the job that holds the keys re-signs an archive rather than
 # running the app's code. Merging is the approval: branch protection on `main` and CODEOWNERS on
@@ -128,6 +129,28 @@ jobs:
           python3 scripts/queue.py verify --app "${{ matrix.token }}" --metadata metadata.json \
             --tag-commit "${TAG_COMMIT:-}"
 
+  # The write access the catalog attaches its signed packages with (policy.yaml
+  # `release-upload`), reported before anything is built rather than after an hour of signing.
+  # It does not gate the publication: without it the packages stay a workflow artifact.
+  access:
+    name: access ${{ matrix.token }}
+    needs: plan
+    if: needs.plan.outputs.count != '0'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check the release access
+        env:
+          APPFAIR_RELEASE_TOKEN: ${{ secrets.APPFAIR_RELEASE_TOKEN || secrets.APP_FAIR_BOT_TOKEN }}
+        run: |
+          python3 scripts/release_upload.py check \
+            --repo "${{ matrix.repo }}" --tag "${{ matrix.tag }}"
+
   # Stage A: the app's build, on a runner with no credentials.
   build:
     name: build ${{ matrix.token }} ${{ matrix.target }}
@@ -237,6 +260,48 @@ jobs:
           asc-key-id: ${{ secrets.DAY_ASC_KEY_ID }}
           asc-issuer: ${{ secrets.DAY_ASC_ISSUER }}
           asc-key-b64: ${{ secrets.DAY_ASC_KEY_B64 }}
+
+  # The signed packages: kept as an artifact, then attached to the app's own release beside the
+  # maintainer's. They carry the flavor in their names, so nothing published there is replaced,
+  # and a release that is still a pre-release becomes the latest one once they are all on it.
+  # An app that granted the catalog no access is a warning here, not a failure.
+  attach:
+    name: attach ${{ matrix.token }}
+    needs: [plan, publish]
+    if: ${{ !cancelled() && needs.publish.result == 'success' && needs.plan.outputs.count != '0' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Collect what was signed
+        uses: actions/download-artifact@v8
+        with:
+          pattern: published-${{ matrix.token }}-*
+          path: packages
+          merge-multiple: true
+      - name: Gather them under their published names
+        run: |
+          python3 scripts/release_upload.py stage \
+            --dir packages --out release-assets --flavor "${{ matrix.flavor }}"
+      # Before the upload, and whatever the upload does: an app that granted no access still has
+      # its signed packages here to attach by hand.
+      - name: Keep them as an artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-assets-${{ matrix.token }}-${{ matrix.tag }}
+          path: release-assets
+          if-no-files-found: ignore
+      - name: Attach them to ${{ matrix.tag }}
+        env:
+          APPFAIR_RELEASE_TOKEN: ${{ secrets.APPFAIR_RELEASE_TOKEN || secrets.APP_FAIR_BOT_TOKEN }}
+        run: |
+          python3 scripts/release_upload.py upload \
+            --repo "${{ matrix.repo }}" --tag "${{ matrix.tag }}" \
+            --dir release-assets --flavor "${{ matrix.flavor }}"
 
   # The catalog's state is a file in this repository.
   record:

@@ -218,7 +218,7 @@ runs:
         echo "package=$PWD/$package" >> "$GITHUB_OUTPUT"
 
     # --- Android ---------------------------------------------------------------------------
-    - name: Sign the .aab
+    - name: Sign the Android packages
       if: inputs.target == 'android-mdc'
       shell: bash
       env:
@@ -227,11 +227,19 @@ runs:
         set -euo pipefail
         [ -n "${KEYSTORE_B64:-}" ] || { echo "::error::no Play upload keystore in this repository's secrets"; exit 1; }
         echo "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/upload.keystore"
-        # `day sign apply` takes the key on the command line, so the app's [signing] tables are
-        # not read and cannot influence which of this runner's variables are used.
-        "$DAY_BIN" sign apply "${{ steps.pick.outputs.package }}" \
-          --keystore "$RUNNER_TEMP/upload.keystore" \
-          --key-alias "$APPFAIR_KEY_ALIAS"
+        # The .aab goes to Play; the .apk beside it is what the release carries, and an unsigned
+        # one cannot be installed, so both are signed with the same key. `day sign apply` takes
+        # the key on the command line, so the app's [signing] tables are not read and cannot
+        # influence which of this runner's variables are used.
+        packages=("${{ steps.pick.outputs.package }}")
+        while IFS= read -r apk; do
+          packages+=("$apk")
+        done < <(find "${{ inputs.packages }}" -maxdepth 1 -name '*.apk' | sort)
+        for package in "${packages[@]}"; do
+          "$DAY_BIN" sign apply "$package" \
+            --keystore "$RUNNER_TEMP/upload.keystore" \
+            --key-alias "$APPFAIR_KEY_ALIAS"
+        done
 
     # --- Apple -----------------------------------------------------------------------------
     - name: Import the distribution certificate

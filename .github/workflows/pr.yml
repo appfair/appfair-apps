@@ -130,6 +130,28 @@ jobs:
           path: app
           flavor: ${{ matrix.flavor }}
 
+  # The write access the catalog needs to attach its signed packages to the app's release
+  # (policy.yaml `release-upload`). Without it the packages are still built, signed and published;
+  # they stay a workflow artifact instead of going on the release, so this reports and passes.
+  access:
+    name: access ${{ matrix.token }}
+    needs: plan
+    if: needs.plan.outputs.count != '0'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check the release access
+        env:
+          APPFAIR_RELEASE_TOKEN: ${{ secrets.APPFAIR_RELEASE_TOKEN || secrets.APP_FAIR_BOT_TOKEN }}
+        run: |
+          python3 scripts/release_upload.py check \
+            --repo "${{ matrix.repo }}" --tag "${{ matrix.tag }}"
+
   # Whether the app at that commit is the app the file claims, read from its manifest through a
   # sparse checkout that leaves the source behind.
   verify:

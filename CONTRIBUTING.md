@@ -78,6 +78,42 @@ are checked against the manifest it was built from.
 
 An app built with the shared Day workflow already publishes the base packages.
 
+## Release access
+
+The App Fair attaches the packages it signed to that same release, beside the ones the
+maintainer published. They carry the build flavor in their names, so nothing of the app's is
+replaced:
+
+```
+games-fair-android-mdc.apk            the maintainer's, unsigned by the App Fair
+games-fair-appfair-android-mdc.apk    the App Fair's, signed with the catalog's key
+games-fair-appfair-android-mdc.aab    the bundle Google Play received
+games-fair-appfair-ios-uikit.ipa      the archive App Store Connect received
+```
+
+It takes write access to the app's repository, granted to the account `policy.yaml` names
+(`appfairbot`): **Settings → Collaborators and teams → Add people → appfairbot → Write**, or a
+team from the `appfair` organization with that role. The checks report on it in every pull
+request, so a missing grant is answered in the review.
+
+Granting it is optional. Without it the app is still built, signed and published to the stores;
+the packages are left as the `release-assets-<token>-<tag>` artifact on the publish run, to
+attach by hand. That artifact is written on every run, whether or not the upload followed.
+
+The upload replaces only assets that account uploaded. An asset published by anyone else keeps
+its place, and the run says so and carries on.
+
+### Pre-releases become the latest release
+
+Once every package is on the release, a release still marked **pre-release** is promoted to the
+latest one. That keeps
+
+    https://github.com/<token>/<token>/releases/latest/download/<app>-appfair-android-mdc.apk
+
+answering across a new version: tag the release as a pre-release, and it becomes `latest` when
+the App Fair's packages are on it rather than the moment it is published. A release that is
+already public is left as it is. `promote-prerelease: false` in `policy.yaml` turns this off.
+
 ## The file
 
 ```yaml

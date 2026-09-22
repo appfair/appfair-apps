@@ -104,6 +104,22 @@ review:
 # `fastlane sigh`, so none are stored here. An app that needs a particular profile names the
 # secret holding it in its `apple-app-store: profile-secret`.
 
+# --- The maintainer's release ----------------------------------------------------------------
+# The packages this queue signs are attached to the release the submission names, beside the ones
+# the maintainer published. They carry the build flavor in their names
+# (`games-fair-appfair-android-mdc.aab`), so nothing of the maintainer's is replaced.
+#
+# It takes write access to the app's repository, granted to the account below. An app that has
+# granted nothing still publishes: `on-missing-access: warn` leaves the signed packages as a
+# workflow artifact to attach by hand, where `error` would stop the submission.
+#
+# Once every package is on the release, a pre-release is marked as the latest one, so
+# `releases/latest/download/<name>` answers between a tag and its publication.
+release-upload:
+  account: appfairbot
+  on-missing-access: warn
+  promote-prerelease: true
+
 # --- Stage B -------------------------------------------------------------------------------
 # Reads the packages stage A built and compares them with the app's release of the same commit.
 # Nothing it reads is executed.

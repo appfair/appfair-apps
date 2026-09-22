@@ -41,6 +41,7 @@ that, so the pipeline splits into three jobs along that boundary.
 | **A, build** | checks the app out at the commit, lints it, packs it **unsigned** for each target | yes | no |
 | **B, validate** | reads the packages: inventory and digests, permissions against the manifest, provenance against the commit, comparison against the app's own release, virus scan | no | no |
 | **C, sign and submit** | signs the package with the App Fair's keys and uploads it to each channel | no | yes |
+| **attach** | keeps the signed packages as a run artifact, then puts them on the app's own release beside the maintainer's | no | yes |
 
 Stage A hands its packages to stage B, which opens them as archives. Stage C re-signs an archive
 and uploads it, with the key material named on the command line, so the submitted app's manifest
@@ -132,7 +133,9 @@ submission.
 build number above what the stores already have, a store listing, and an app that meets the
 [inclusion criteria](https://appfair.org/docs/inclusion-criteria/). The base release used for the
 comparison comes from the app's own CI, so its existing release workflow is enough and the App
-Fair's own packages never have to be published. The queue derives the base artifact name from the
+Fair's own packages never have to be published. The maintainer also grants the catalog's account
+write access to the repository, which is how the signed packages reach that release, and which
+is optional: without it they stay a run artifact (CONTRIBUTING.md, "Release access"). The queue derives the base artifact name from the
 unflavored manifest at the pinned commit, including Day's unsigned-IPA suffix. The tag names the
 version being published, so `v2.0.2` publishes 2.0.2 on both stores; a flavor that states a
 `version` of its own is rejected unless the tag agrees with it.
