@@ -1,21 +1,17 @@
-# Merging a submission publishes it: the pull request's stages, plus signing and upload.
+# Publish one app again, by hand: the pull request's stages, plus the signing and the upload.
 #
 #   plan, verify   this repository and the app's manifest. No app code, no secrets.
 #   build          runs the app's build. App code, no secrets.
 #   validate       reads what the build produced. No app code, no secrets.
-#   publish        signs that package and uploads it. Secrets, no app code.
-#   attach         keeps the signed packages as an artifact and puts them on the app's release.
+#   submit         signs each package, submits it, attaches it. Secrets, no app code.
 #
-# The build job holds no keys, and the job that holds the keys re-signs an archive rather than
-# running the app's code. Merging is the approval: branch protection on `main` and CODEOWNERS on
-# `apps/` decide who can start a run.
+# A submission is published from its own pull request (pr.yml), which merges once the stores have
+# taken it, so nothing here runs on a merge. This is the recovery path: a store that failed after
+# a partial upload, a lane that has to be run again, a version published from `main` without a
+# pull request.
 name: publish
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - apps/**
   workflow_dispatch:
     inputs:
       app:
@@ -63,13 +59,9 @@ jobs:
         id: plan
         run: |
           set -euo pipefail
-          if [ -n "${{ inputs.app }}" ]; then
-            python3 scripts/queue.py plan --app "${{ inputs.app }}" \
-              ${{ inputs.channel && format('--channel {0}', inputs.channel) || '' }} \
-              ${{ inputs.lane && format('--lane "{0}"', inputs.lane) || '' }}
-          else
-            python3 scripts/queue.py plan --changed-from "${{ github.event.before }}"
-          fi
+          python3 scripts/queue.py plan --app "${{ inputs.app }}" \
+            ${{ inputs.channel && format('--channel {0}', inputs.channel) || '' }} \
+            ${{ inputs.lane && format('--lane "{0}"', inputs.lane) || '' }}
 
   # The pull request's checks, repeated against what is now on `main`.
   verify:
@@ -207,134 +199,39 @@ jobs:
           allow-mismatch: ${{ inputs.allow-mismatch && 'true' || 'false' }}
           github-token: ${{ github.token }}
 
-  # Stage C: signing and upload. The only job that reaches the secrets, running the day CLI,
-  # fastlane and the platform signing tools over an archive.
-  publish:
-    name: publish ${{ matrix.token }} → ${{ matrix.channel }}
+  # Stage C, in submit.yml so the pull request and this workflow run the same one.
+  submit:
     needs: [plan, validate]
     if: needs.plan.outputs.count != '0'
-    runs-on: ${{ matrix.runner }}
-    environment: store
-    permissions:
-      contents: read
-    strategy:
-      fail-fast: false
-      # One at a time, so two merges cannot race into one store record.
-      max-parallel: 1
-      matrix: ${{ fromJSON(needs.plan.outputs.publish-matrix) }}
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v8
-        with:
-          name: build-${{ matrix.token }}-${{ matrix.target }}
-          path: packages
-      - uses: ./.github/actions/sign-submit
-        with:
-          token: ${{ matrix.token }}
-          repo: ${{ matrix.repo }}
-          ref: ${{ matrix.commit }}
-          target: ${{ matrix.target }}
-          channel: ${{ matrix.channel }}
-          flavor: ${{ matrix.flavor }}
-          day-version: ${{ matrix.day_version }}
-          lane: ${{ matrix.lane }}
-          keystore-b64: ${{ secrets.DAY_ANDROID_KEYSTORE_B64 || secrets.KEYSTORE_JKS }}
-          keystore-properties-b64: ${{ secrets.KEYSTORE_PROPERTIES }}
-          key-alias: ${{ secrets.DAY_ANDROID_KEY_ALIAS }}
-          keystore-password: ${{ secrets.DAY_KS_PASS }}
-          key-password: ${{ secrets.DAY_KEY_PASS }}
-          play-json-key: ${{ secrets.DAY_PLAY_JSON_KEY || secrets.GOOGLE_PLAY_APIKEY }}
-          apple-cert-p12: ${{ secrets.DAY_APPLE_CERT_P12 || secrets.APPLE_CERTIFICATES_P12 }}
-          apple-cert-password: ${{ secrets.DAY_APPLE_CERT_PASSWORD || secrets.APPLE_CERTIFICATES_P12_PASSWORD }}
-          # The name on the catalog's certificate. Apple has issued both "iPhone Distribution"
-          # and "Apple Distribution" certificates over the years, and codesign matches the name.
-          apple-identity: ${{ secrets.DAY_APPLE_IDENTITY || 'Apple Distribution' }}
-          # The fallback app id for the profile request, and the team that issues it. The id
-          # published under comes from the app's manifest; the profile is issued during the run.
-          app-id: ${{ matrix.app_id }}
-          apple-team: ${{ secrets.DAY_APPLE_TEAM }}
-          # Empty for nearly every app. One that needs a particular profile names the secret
-          # holding it in its submission.
-          apple-profile-b64: ${{ matrix.profile_secret != '' && secrets[matrix.profile_secret] || '' }}
-          asc-api-key-b64: ${{ secrets.APPLE_APPSTORE_APIKEY }}
-          asc-key-id: ${{ secrets.DAY_ASC_KEY_ID }}
-          asc-issuer: ${{ secrets.DAY_ASC_ISSUER }}
-          asc-key-b64: ${{ secrets.DAY_ASC_KEY_B64 }}
-
-  # The signed packages: kept as an artifact, then attached to the app's own release beside the
-  # maintainer's. They carry the flavor in their names, so nothing published there is replaced,
-  # and a release that is still a pre-release becomes the latest one once they are all on it.
-  # An app that granted the catalog no access is a warning here, not a failure.
-  attach:
-    name: attach ${{ matrix.token }}
-    needs: [plan, publish]
-    if: ${{ !cancelled() && needs.publish.result == 'success' && needs.plan.outputs.count != '0' }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
-    steps:
-      - uses: actions/checkout@v7
-      - name: Collect what was signed
-        uses: actions/download-artifact@v8
-        with:
-          pattern: published-${{ matrix.token }}-*
-          path: packages
-          merge-multiple: true
-      - name: Gather them under their published names
-        run: |
-          python3 scripts/release_upload.py stage \
-            --dir packages --out release-assets --flavor "${{ matrix.flavor }}"
-      # Before the upload, and whatever the upload does: an app that granted no access still has
-      # its signed packages here to attach by hand.
-      - name: Keep them as an artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: release-assets-${{ matrix.token }}-${{ matrix.tag }}
-          path: release-assets
-          if-no-files-found: ignore
-      - name: Attach them to ${{ matrix.tag }}
-        env:
-          APPFAIR_RELEASE_TOKEN: ${{ secrets.APPFAIR_RELEASE_TOKEN || secrets.APP_FAIR_BOT_TOKEN }}
-        run: |
-          python3 scripts/release_upload.py upload \
-            --repo "${{ matrix.repo }}" --tag "${{ matrix.tag }}" \
-            --dir release-assets --flavor "${{ matrix.flavor }}"
+    uses: ./.github/workflows/submit.yml
+    secrets: inherit
+    with:
+      matrix: ${{ needs.plan.outputs.matrix }}
+      publish-matrix: ${{ needs.plan.outputs.publish-matrix }}
 
   # The catalog's state is a file in this repository.
   record:
-    name: record ${{ matrix.token }}
-    needs: [plan, publish]
-    if: ${{ !cancelled() && needs.publish.result == 'success' && needs.plan.outputs.count != '0' }}
+    name: record
+    needs: [plan, submit]
+    if: ${{ !cancelled() && needs.submit.result == 'success' && needs.plan.outputs.count != '0' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
     concurrency:
       group: record-state
       cancel-in-progress: false
-    strategy:
-      fail-fast: false
-      max-parallel: 1
-      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v7
       - name: Record the publication
+        env:
+          MATRIX: ${{ needs.plan.outputs.matrix }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          python3 scripts/queue.py record \
-            --app "${{ matrix.token }}" \
-            --tag "${{ matrix.tag }}" \
-            --channels "${{ matrix.channels }}" \
-            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-      - name: Commit the record
-        run: |
-          set -euo pipefail
+          python3 scripts/queue.py record --matrix "$MATRIX" --run-url "$RUN_URL"
           git config user.name "appfair-bot"
           git config user.email "bot@appfair.org"
           git add state/published.json
           git diff --cached --quiet && { echo "nothing changed"; exit 0; }
-          # `paths: apps/**` above keeps this commit from starting another run.
-          git commit -m "Record ${{ matrix.token }} ${{ matrix.tag }} as published"
+          git commit -m "Record what run ${{ github.run_id }} published"
           git push origin HEAD:main

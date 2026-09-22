@@ -181,7 +181,7 @@ or taken up with the maintainer.
 | `google-play-store` | `android-mdc` | submits the build to the production track | `submit` |
 | `altstore`, `f-droid`, `samsung-galaxy-store` | | declared but not yet implemented; a submission naming one is rejected with that message | |
 
-A merged submission asks Apple to review the build and Google to review and roll it out to
+An approved submission asks Apple to review the build and Google to review and roll it out to
 production, with no setting to say so. Releasing on the App Store stays manual, since an approved
 version waits for the Release button; Google's rollout starts when review passes.
 
@@ -220,7 +220,8 @@ out of date as soon as an app changed hands.
 
 ## What the checks do
 
-A pull request runs the stages a merge runs, stopping before the signing.
+A pull request runs every stage of a submission. The first seven run on every push to it; the
+eighth waits for an App Fair maintainer.
 
 1. **The rules against themselves** (`scripts/queue.py selftest`), so a change to the checks is
    checked too.
@@ -252,7 +253,17 @@ A pull request runs the stages a merge runs, stopping before the signing.
    | provenance | a missing SBOM, a commit other than the pinned one, or a build from a dirty checkout |
    | scan | ClamAV finding something |
 
-A red check is a submission that would fail on merge; the annotation names the file and line to
+8. **The submission** (stage C), behind the `store` environment's reviewers: an App Fair
+   maintainer approves it in the run, and only then is the package signed with the catalog's
+   keys, uploaded to each channel, and attached to the app's own release. Each store is asked
+   what it holds before the upload and what happened after it.
+
+When every channel has taken the build, the pull request is merged and the publication is
+recorded in `state/published.json`. A pull request that is still open is a version that has not
+gone out; a channel that failed leaves it open with the failure on it, to re-run once the cause
+is fixed.
+
+A red check is a submission that cannot go out; the annotation names the file and line to
 change.
 
 ### When the comparison differs
@@ -271,22 +282,29 @@ Either fix the cause and tag again, or, once a maintainer of this repository und
 accepts the difference, apply the `allow-mismatch` label and re-run. The label is recorded in the
 run, so a waived comparison stays visible afterwards.
 
-## What merging does
+## What approval does
 
-Merging is the approval. The publish workflow repeats stages A and B, then:
+An App Fair maintainer approves the submission in the pull request's own run, which is how the
+`store` environment's reviewers work: the run reaches stage C and waits for one of them.
 
 - **Stage C** signs the package stage A built using `day sign apply`, which re-signs the archive
   without rebuilding it, and uploads it through the fastlane lanes `day store stage` generates
   from the app's listing. The key material is named on the command line from this repository's
   secrets, so the app's own `[signing]` tables are not read.
-- **The record** is written to `state/published.json`: what was published, from which tag, by which
-  run.
+- **The attachment** puts the signed packages on the app's own release beside the maintainer's,
+  and marks a staged pre-release as the latest release.
+- **The merge** closes the pull request, and **the record** is written to `state/published.json`:
+  what was published, from which tag, by which run.
+
+Nothing publishes on a merge. The pull request is merged because the stores took the build, so an
+open pull request is a version that has not gone out and a closed one is a version that has.
 
 The stores take it from there: Apple's review, Google's rollout. A rejection goes to the app's
 maintainer, who fixes it in their repository, tags again, and opens a new pull request here.
 
 To publish an app again without changing its file, after a store-side failure or a transient
-upload error, a maintainer runs the `publish` workflow manually with the app token.
+upload error, a maintainer runs the `publish` workflow manually with the app token. That path
+runs the same stage C behind the same reviewers.
 
 ## Updating an app
 

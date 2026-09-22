@@ -805,16 +805,21 @@ def tag_commit(repo_url: str, tag: str) -> str | None:
 
 
 def latest_release(owner_repo: str) -> str | None:
-    """The tag of the repository's latest release, as GitHub marks it.
+    """The tag of the repository's newest release, pre-release or not.
 
-    The comparison needs a release, so the latest release is a better answer than the highest tag.
+    The comparison needs a release, so a release is a better answer than the highest tag. A
+    pre-release counts: an app that stages its releases (daybrite/actions `release-mode:
+    pre-release`) publishes one for every version and marks it Latest once it is approved, and the
+    one waiting for approval is exactly the one the catalog is asked to build. Drafts do not, since
+    their assets are not downloadable.
+
     A failure here falls back to the tags.
     """
     import urllib.error
     import urllib.request
 
     request = urllib.request.Request(
-        f"https://api.github.com/repos/{owner_repo}/releases/latest", method="GET"
+        f"https://api.github.com/repos/{owner_repo}/releases?per_page=20", method="GET"
     )
     request.add_header("Accept", "application/vnd.github+json")
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
@@ -822,9 +827,16 @@ def latest_release(owner_repo: str) -> str | None:
         request.add_header("Authorization", f"Bearer {token}")
     try:
         with urllib.request.urlopen(request, timeout=20) as response:  # noqa: S310
-            return str(json.loads(response.read()).get("tag_name") or "") or None
+            releases = json.loads(response.read())
     except (urllib.error.HTTPError, OSError, ValueError):
         return None
+    if not isinstance(releases, list):
+        return None
+    # The list arrives newest first, by creation.
+    for release in releases:
+        if isinstance(release, dict) and not release.get("draft"):
+            return str(release.get("tag_name") or "") or None
+    return None
 
 
 def fetch_text(owner_repo: str, ref: str, path: str) -> str | None:
@@ -870,7 +882,7 @@ def released(token: str, policy: Policy, wanted: str | None) -> tuple[str, str, 
     tag, how = wanted, "named on the command line"
     if not tag:
         tag = latest_release(owner_repo)
-        how = "the latest release"
+        how = "the newest release"
     if not tag:
         tag = newest_tag(remote_tags(repo_url), policy.tag_pattern)
         how = "the highest tag (no release was readable)"
@@ -1278,7 +1290,23 @@ def cmd_authorize(args: argparse.Namespace) -> int:
 
 
 def cmd_record(args: argparse.Namespace) -> int:
-    """Record a publication in state/published.json."""
+    """Record one publication, or every app in a plan's matrix, in state/published.json."""
+    if args.matrix:
+        rows = json.loads(args.matrix).get("include", [])
+        if not rows:
+            Problem("record", "--matrix holds no rows to record").emit()
+            return 1
+        for row in rows:
+            one = argparse.Namespace(
+                app=row.get("token", ""),
+                tag=row.get("tag", ""),
+                channels=row.get("channels", ""),
+                run_url=args.run_url,
+                matrix="",
+            )
+            if cmd_record(one):
+                return 1
+        return 0
     app = next((a for a in catalog() if a.token == args.app), None)
     if app is None:
         Problem("apps", f"no submission named {args.app!r} in apps/").emit()
@@ -1300,7 +1328,7 @@ def cmd_record(args: argparse.Namespace) -> int:
     state["updated"] = now
     STATE.parent.mkdir(parents=True, exist_ok=True)
     STATE.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n")
-    print(f"recorded {app.token} {state['apps'][app.token]['tag']} → {STATE.relative_to(ROOT)}")
+    print(f"recorded {app.token} {state['apps'][app.token]['tag']} → {relative(STATE)}")
     return 0
 
 
@@ -1883,6 +1911,16 @@ def action_definition(uses: str, local_actions: Path | None) -> tuple[str, dict]
     this check instead of a submission.
     """
     if uses.startswith("./"):
+        # A reusable workflow rather than an action: `uses: ./.github/workflows/submit.yml`. Its
+        # `workflow_call` inputs are the interface, and they are checked the same way.
+        if uses.endswith((".yml", ".yaml")):
+            path = ROOT / uses[2:]
+            if not path.is_file():
+                return None
+            document = yaml.safe_load(path.read_text()) or {}
+            # `on:` parses as the boolean True, which is YAML 1.1 for the bare word "on".
+            triggers = document.get("on", document.get(True)) or {}
+            return uses, {"inputs": (triggers.get("workflow_call") or {}).get("inputs") or {}}
         for name in ("action.yml", "action.yaml"):
             path = ROOT / uses[2:] / name
             if path.is_file():
@@ -2329,7 +2367,12 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(func=cmd_authorize)
 
     p = sub.add_parser("record", help="write a publication into state/published.json")
-    p.add_argument("--app", required=True)
+    p.add_argument("--app", default="")
+    p.add_argument(
+        "--matrix",
+        default="",
+        help="a plan's per-app matrix as JSON, recording every row in it instead of one --app",
+    )
     p.add_argument("--tag")
     p.add_argument("--channels", help="comma-separated channel names this run published to")
     p.add_argument("--run-url")

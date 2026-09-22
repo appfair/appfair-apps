@@ -2,8 +2,9 @@
 
 The App Fair publishes apps to the App Store and Google Play from this repository. Each app has a
 metadata file under `apps/`. A pull request that adds or changes one builds the app and checks the
-build; merging it signs the build with the App Fair's keys and uploads it. The app's source stays
-in its own repository.
+build; an App Fair maintainer then approves the submission from that pull request, which signs the
+build with the App Fair's keys, uploads it to each store, and merges once the stores have taken
+it. The app's source stays in its own repository.
 
 ```yaml
 # apps/Faire-Games.yaml
@@ -42,6 +43,7 @@ that, so the pipeline splits into three jobs along that boundary.
 | **B, validate** | reads the packages: inventory and digests, permissions against the manifest, provenance against the commit, comparison against the app's own release, virus scan | no | no |
 | **C, sign and submit** | signs the package with the App Fair's keys and uploads it to each channel | no | yes |
 | **attach** | keeps the signed packages as a run artifact, then puts them on the app's own release beside the maintainer's | no | yes |
+| **merge** | merges the pull request and records the publication | no | no |
 
 Stage A hands its packages to stage B, which opens them as archives. Stage C re-signs an archive
 and uploads it, with the key material named on the command line, so the submitted app's manifest
@@ -196,7 +198,10 @@ The short version:
    Each writes `apps/<token>.yaml` and validates it. Read the result before opening the pull
    request: the title comes from the app's store listing, and the channel list covers every
    channel the catalog publishes to.
-4. Watch the checks. The same jobs run on merge, so a green pull request will publish.
+4. Watch the checks. When they are green, an App Fair maintainer approves the submission in the
+   run itself, and the stages that hold the keys run from your pull request. The pull request
+   merges when the stores have taken the build, so an open pull request means the version has
+   not gone out yet.
 
 ## Running the checks locally
 
@@ -265,11 +270,13 @@ These settings live in the repository rather than in a file:
 - **Actions policy.** The stages call composite actions from `daybrite/actions` for the toolchain
   and the day CLI. Under *Settings → Actions → General*, "Allow actions and reusable workflows"
   must admit `daybrite/*`.
-- **A `store` environment.** The signing job names it, which keeps the store secrets off the
-  repository and allows reviewers or a wait timer in front of them.
-- **Branch protection on `main`.** A merge publishes, so `main` takes pull requests only, with
-  review from the owners in `.github/CODEOWNERS`. The `record` job pushes `state/published.json`
-  to `main`, so either let the Actions bot bypass the rule for that path or drop the job.
+- **A `store` environment with required reviewers.** The signing job names it, which keeps the
+  store secrets off the repository and is where a submission is approved: the run waits until one
+  of those reviewers releases it. Leave its deployment branches unrestricted, since the run that
+  waits is a pull request's.
+- **Branch protection on `main`** is optional here, since merging publishes nothing. When it is
+  on, the `merge` job has to be able to merge and the `record` job to push
+  `state/published.json`, so let the Actions bot bypass the rule or drop the jobs.
 - **An `allow-mismatch` label**, named in `policy.yaml`. A maintainer applies it to a pull request
   whose comparison cannot pass for a known reason.
 - **Write access for workflows.** Under *Settings → Actions → General*, "Workflow permissions"

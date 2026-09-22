@@ -1,11 +1,17 @@
-# A submission, checked the way a merge checks it, without the publishing. The stages are
-# separate jobs because the boundary between them is a security boundary:
+# A submission, from its checks to the stores. The stages are separate jobs because the boundary
+# between them is a security boundary:
 #
 #   plan, lint, verify   this repository and the app's manifest; no app code, no secrets
+#   access               whether the catalog can attach to the app's release; no app code
 #   build                runs the app's build; app code, no secrets
 #   validate             reads what the build produced; no app code, no secrets
+#   submit               signs, submits and attaches; secrets, no app code (submit.yml)
+#   merge                merges this pull request, once the stores have taken it
 #
-# publish.yml adds the signing stage, which holds the secrets and runs none of the app's code.
+# Everything up to `validate` runs on every push to the pull request. `submit` waits for a
+# reviewer of the `store` environment, so a maintainer decides when a version goes out, and the
+# pull request stays open until it has. Merging is the record of a publication rather than the
+# thing that causes one.
 name: pull request
 
 on:
@@ -20,6 +26,10 @@ on:
 permissions:
   contents: read
 
+# One run per pull request: a push replaces the run before it, so a review reads one set of
+# results. It also cancels a submission in flight, which is why the approval belongs at the end
+# of a review rather than the start; a submission cancelled between two stores is finished
+# through the publish workflow's `channel` input.
 concurrency:
   group: pr-${{ github.event.pull_request.number }}
   cancel-in-progress: true
@@ -33,6 +43,7 @@ jobs:
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
       build-matrix: ${{ steps.plan.outputs.build-matrix }}
+      publish-matrix: ${{ steps.plan.outputs.publish-matrix }}
       count: ${{ steps.plan.outputs.count }}
       allow-mismatch: ${{ steps.label.outputs.allow }}
     steps:
@@ -278,3 +289,56 @@ jobs:
           day-version: ${{ matrix.day_version }}
           allow-mismatch: ${{ needs.plan.outputs.allow-mismatch }}
           github-token: ${{ github.token }}
+
+  # Stage C, the submission itself, in submit.yml so this and publish.yml run the same one. The
+  # `store` environment its publish job declares is where a maintainer approves: until someone
+  # with that environment's review does, this job waits and the pull request stays open.
+  submit:
+    needs: [plan, lint, verify, validate]
+    if: needs.plan.outputs.count != '0'
+    uses: ./.github/workflows/submit.yml
+    secrets: inherit
+    with:
+      matrix: ${{ needs.plan.outputs.matrix }}
+      publish-matrix: ${{ needs.plan.outputs.publish-matrix }}
+
+  # The stores have the build, and its packages are on the app's release: the submission is done,
+  # and merging is how the catalog records it. A failed channel leaves the pull request open with
+  # its failure on it, to re-run once the cause is fixed.
+  merge:
+    name: merge
+    needs: [plan, submit]
+    if: ${{ !cancelled() && needs.submit.result == 'success' && needs.plan.outputs.count != '0' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    concurrency:
+      group: record-state
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+      - name: Merge this pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh pr merge "${{ github.event.pull_request.number }}" --squash --delete-branch \
+            --subject "${{ github.event.pull_request.title }}" \
+            --body "Published from ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+      # On `main`, which now carries the submissions this run published.
+      - name: Record the publication
+        env:
+          MATRIX: ${{ needs.plan.outputs.matrix }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git checkout -B main origin/main
+          python3 scripts/queue.py record --matrix "$MATRIX" --run-url "$RUN_URL"
+          git config user.name "appfair-bot"
+          git config user.email "bot@appfair.org"
+          git add state/published.json
+          git diff --cached --quiet && { echo "nothing changed"; exit 0; }
+          git commit -m "Record what run ${{ github.run_id }} published"
+          git push origin HEAD:main

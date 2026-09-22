@@ -1,0 +1,115 @@
+# Stage C, as one workflow both callers use: sign each validated package, submit it to its
+# channel, and attach the signed packages to the app's own release.
+#
+# The pull request calls it behind the `store` environment, whose reviewers decide when a
+# submission goes out; publish.yml calls it for a re-run of one app. Nothing here runs the app's
+# code: it re-signs archives stage A produced and hands them to fastlane.
+name: submit
+
+on:
+  workflow_call:
+    inputs:
+      matrix:
+        description: The per-app rows `queue.py plan` wrote, as JSON.
+        type: string
+        required: true
+      publish-matrix:
+        description: The per-channel rows, one submission each.
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: publish ${{ matrix.token }} → ${{ matrix.channel }}
+    runs-on: ${{ matrix.runner }}
+    environment: store
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      # One at a time, so two merges cannot race into one store record.
+      max-parallel: 1
+      matrix: ${{ fromJSON(inputs.publish-matrix) }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: build-${{ matrix.token }}-${{ matrix.target }}
+          path: packages
+      - uses: ./.github/actions/sign-submit
+        with:
+          token: ${{ matrix.token }}
+          repo: ${{ matrix.repo }}
+          ref: ${{ matrix.commit }}
+          target: ${{ matrix.target }}
+          channel: ${{ matrix.channel }}
+          flavor: ${{ matrix.flavor }}
+          day-version: ${{ matrix.day_version }}
+          lane: ${{ matrix.lane }}
+          keystore-b64: ${{ secrets.DAY_ANDROID_KEYSTORE_B64 || secrets.KEYSTORE_JKS }}
+          keystore-properties-b64: ${{ secrets.KEYSTORE_PROPERTIES }}
+          key-alias: ${{ secrets.DAY_ANDROID_KEY_ALIAS }}
+          keystore-password: ${{ secrets.DAY_KS_PASS }}
+          key-password: ${{ secrets.DAY_KEY_PASS }}
+          play-json-key: ${{ secrets.DAY_PLAY_JSON_KEY || secrets.GOOGLE_PLAY_APIKEY }}
+          apple-cert-p12: ${{ secrets.DAY_APPLE_CERT_P12 || secrets.APPLE_CERTIFICATES_P12 }}
+          apple-cert-password: ${{ secrets.DAY_APPLE_CERT_PASSWORD || secrets.APPLE_CERTIFICATES_P12_PASSWORD }}
+          # The name on the catalog's certificate. Apple has issued both "iPhone Distribution"
+          # and "Apple Distribution" certificates over the years, and codesign matches the name.
+          apple-identity: ${{ secrets.DAY_APPLE_IDENTITY || 'Apple Distribution' }}
+          # The fallback app id for the profile request, and the team that issues it. The id
+          # published under comes from the app's manifest; the profile is issued during the run.
+          app-id: ${{ matrix.app_id }}
+          apple-team: ${{ secrets.DAY_APPLE_TEAM }}
+          # Empty for nearly every app. One that needs a particular profile names the secret
+          # holding it in its submission.
+          apple-profile-b64: ${{ matrix.profile_secret != '' && secrets[matrix.profile_secret] || '' }}
+          asc-api-key-b64: ${{ secrets.APPLE_APPSTORE_APIKEY }}
+          asc-key-id: ${{ secrets.DAY_ASC_KEY_ID }}
+          asc-issuer: ${{ secrets.DAY_ASC_ISSUER }}
+          asc-key-b64: ${{ secrets.DAY_ASC_KEY_B64 }}
+
+  # The signed packages: kept as an artifact, then attached to the app's own release beside the
+  # maintainer's. They carry the flavor in their names, so nothing published there is replaced,
+  # and a release that is still a pre-release becomes the latest one once they are all on it.
+  # An app that granted the catalog no access is a warning here, not a failure.
+  attach:
+    name: attach ${{ matrix.token }}
+    needs: [publish]
+    if: ${{ !cancelled() && needs.publish.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(inputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Collect what was signed
+        uses: actions/download-artifact@v8
+        with:
+          pattern: published-${{ matrix.token }}-*
+          path: packages
+          merge-multiple: true
+      - name: Gather them under their published names
+        run: |
+          python3 scripts/release_upload.py stage \
+            --dir packages --out release-assets --flavor "${{ matrix.flavor }}"
+      # Before the upload, and whatever the upload does: an app that granted no access still has
+      # its signed packages here to attach by hand.
+      - name: Keep them as an artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-assets-${{ matrix.token }}-${{ matrix.tag }}
+          path: release-assets
+          if-no-files-found: ignore
+      - name: Attach them to ${{ matrix.tag }}
+        env:
+          APPFAIR_RELEASE_TOKEN: ${{ secrets.APPFAIR_RELEASE_TOKEN || secrets.APP_FAIR_BOT_TOKEN }}
+        run: |
+          python3 scripts/release_upload.py upload \
+            --repo "${{ matrix.repo }}" --tag "${{ matrix.tag }}" \
+            --dir release-assets --flavor "${{ matrix.flavor }}"
