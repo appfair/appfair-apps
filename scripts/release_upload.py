@@ -12,8 +12,8 @@ the ones the maintainer published, named with the build flavor:
     release_upload.py stage  --dir packages --flavor appfair --out release-assets
     release_upload.py upload --repo Games-Fair/Games-Fair --tag v2.1.1 --dir release-assets
 
-`check` asks whether the account in policy.yaml can write to the repository and says what to
-grant when it cannot. `stage` gathers the packages under the names they are published with, for
+`check` asks whether the app is installed on the repository and says how to install it when it
+is not. `stage` gathers the packages under the names they are published with, for
 the workflow artifact every run leaves behind. `upload` attaches them and, once they are all
 there, marks a pre-release as the latest release, so
 `releases/latest/download/<name>` keeps answering between a tag and its publication.
@@ -21,13 +21,9 @@ there, marks a pre-release as the latest release, so
 An app that has granted nothing is a warning, not a failure: the run carries on and the staged
 artifact is there to attach by hand.
 
-Two ways to hold the access, in this order:
-
-  the App Fair GitHub App  a maintainer installs it on their repository, and this mints a
-                           one-hour installation token for that repository alone, from
-                           APPFAIR_APP_PRIVATE_KEY and the `app-id` in policy.yaml
-  APPFAIR_RELEASE_TOKEN    a personal access token for the account policy.yaml names, for a
-                           repository that granted the access that way
+The access is the App Fair GitHub App: a maintainer installs it on their repository, and this
+signs as the app and mints a one-hour token for that repository alone, from
+APPFAIR_APP_PRIVATE_KEY and the `app-id` in policy.yaml.
 """
 
 from __future__ import annotations
@@ -48,7 +44,6 @@ import yaml
 ROOT = Path(__file__).resolve().parent.parent
 API = "https://api.github.com"
 UPLOADS = "https://uploads.github.com"
-TOKEN_ENV = "APPFAIR_RELEASE_TOKEN"
 APP_KEY_ENV = "APPFAIR_APP_PRIVATE_KEY"
 
 # What gets attached. The `.buildinfo.json` and `.sbom-*.json` sidecars beside these describe the
@@ -119,6 +114,12 @@ def installation_token(repo: str, app_id: str, pem: str) -> tuple[str, str]:
 
     Narrowed on the way out: one repository, one permission, one hour. The App may be installed
     across an organization; what this run holds is smaller than that.
+
+    Minting is also the access check. GitHub refuses a token for a repository the installation
+    does not cover, and refuses a permission the App was not granted, so a token that comes back
+    with `contents: write` for this repository is proof of both. The repository's own
+    `permissions` block cannot say it: that block describes a user's role, and an App has none,
+    so it reads all false however much the App can do.
     """
     try:
         jwt = app_jwt(app_id, pem)
@@ -138,6 +139,12 @@ def installation_token(repo: str, app_id: str, pem: str) -> tuple[str, str]:
     if status != 201 or not isinstance(body, dict):
         message = (body or {}).get("message", "") if isinstance(body, dict) else ""
         return "", f"the App Fair app could not mint a token for {repo} ({status}) {message}".strip()
+    granted = (body.get("permissions") or {}).get("contents")
+    if granted != "write":
+        return "", f"the App Fair app's token for {repo} carries contents: {granted or 'none'}, not write."
+    covered = [str(r.get("full_name", "")).lower() for r in body.get("repositories") or []]
+    if covered and repo.lower() not in covered:
+        return "", f"the App Fair app's token covers {', '.join(covered)}, not {repo}."
     return str(body.get("token") or ""), ""
 
 
@@ -150,28 +157,21 @@ class Credential:
     origin: str
     #: The login an asset it uploads carries, which is how its own assets are recognized.
     uploader: str
-    #: Whether GitHub can be asked who this is (an installation token has no user).
-    has_user: bool
 
 
-def credential(repo: str, conf: dict, account: str) -> tuple[Credential | None, str]:
-    """The App's installation token, or the personal access token, or why there is neither."""
-    reasons = []
+def credential(repo: str, conf: dict) -> tuple[Credential | None, str]:
+    """The App's installation token for `repo`, or why there is none."""
     pem = os.environ.get(APP_KEY_ENV, "")
     app_id = str(conf.get("app-id") or "")
     slug = str(conf.get("app") or "app-fair-publisher")
-    if pem and app_id:
-        token, why = installation_token(repo, app_id, pem)
-        if token:
-            return Credential(token, f"the App Fair app's installation on {repo}", f"{slug}[bot]", False), ""
-        reasons.append(why)
-    elif pem:
-        reasons.append(f"{APP_KEY_ENV} is set and policy.yaml names no app-id, so the App Fair app was not used.")
-    token = os.environ.get(TOKEN_ENV, "")
+    if not pem:
+        return None, f"no {APP_KEY_ENV} in this job."
+    if not app_id:
+        return None, "policy.yaml names no app-id, so the App Fair app cannot sign for itself."
+    token, why = installation_token(repo, app_id, pem)
     if token:
-        return Credential(token, TOKEN_ENV, account, True), " ".join(reasons)
-    reasons.append(f"no {APP_KEY_ENV} and no {TOKEN_ENV} in this job.")
-    return None, " ".join(reasons)
+        return Credential(token, f"the App Fair app's installation on {repo}", f"{slug}[bot]"), ""
+    return None, why
 
 
 def install_text(repo: str) -> str:
@@ -185,32 +185,15 @@ def install_text(repo: str) -> str:
     )
 
 
-def grant_text(account: str) -> str:
-    """The older way in, for a repository that granted the account rather than the app."""
+def install_text(repo: str) -> str:
+    """What the maintainer does to let the catalog attach its packages."""
+    conf = policy()
+    slug = str(conf.get("app") or "app-fair-publisher")
     return (
-        f"Settings -> Collaborators and teams -> Add people -> {account} -> Write. The App Fair "
-        "app is the way in now; this account is kept for repositories that granted it already."
+        f"Install the App Fair app on {repo}: https://github.com/apps/{slug} -> Install -> this "
+        "repository. It asks for Contents: Read and write, which is what attaches the catalog's "
+        "signed packages beside yours; nothing of yours is replaced or removed."
     )
-
-
-def access(repo: str, token: str, account: str) -> tuple[bool, str]:
-    """Whether the token can write to `repo`, and what to say when it cannot."""
-    status, body = api("GET", f"{API}/repos/{repo}", token)
-    if status == 0:
-        return False, f"GitHub could not be reached: {(body or {}).get('message', 'no answer')}."
-    if status == 404:
-        return False, (
-            f"{repo} is not visible to the App Fair ({account}), so its release cannot be written "
-            f"to. {install_text(repo)}"
-        )
-    if status != 200 or not isinstance(body, dict):
-        return False, f"GitHub answered {status} for {repo}."
-    if not (body.get("permissions") or {}).get("push"):
-        return False, (
-            f"the App Fair ({account}) cannot write to {repo}, so the signed packages have "
-            f"nowhere to go. {install_text(repo)}"
-        )
-    return True, f"{account} can write to {repo}."
 
 
 def release(repo: str, tag: str, token: str) -> tuple[int, dict]:
@@ -228,42 +211,26 @@ def published_name(name: str) -> str:
 
 
 def resolve(args: argparse.Namespace) -> tuple[Credential | None, str, str]:
-    """This run's credential, what a missing grant does, and why there is no credential."""
+    """This run's credential, what a missing install does, and why there is no credential."""
     conf = policy()
-    account = args.account or str(conf.get("account") or "")
     severity = getattr(args, "missing_access", "") or str(conf.get("on-missing-access") or "warn")
-    cred, why = credential(args.repo, conf, account)
+    cred, why = credential(args.repo, conf)
     return cred, "error" if severity == "error" else "warning", why
 
 
-def writable(repo: str, cred: Credential | None, why: str, account: str) -> tuple[bool, str]:
+def writable(repo: str, cred: Credential | None, why: str) -> tuple[bool, str]:
     """Whether the catalog can write to `repo`'s releases, and why not when it cannot."""
     if cred is None:
         return False, f"the App Fair cannot write to {repo}: {why} {install_text(repo)}".strip()
-    # An installation token has no user behind it; the App is the identity, fixed by the key this
-    # run holds. A personal access token has to be the account apps were asked to grant.
-    if cred.has_user:
-        status, who = api("GET", f"{API}/user", cred.token)
-        login = (who or {}).get("login", "") if isinstance(who, dict) else ""
-        if status != 200:
-            return False, f"{TOKEN_ENV} was refused by GitHub ({status}); it is expired or not a token."
-        if account and login.lower() != account.lower():
-            return False, (
-                f"{TOKEN_ENV} authenticates as {login!r}, and policy.yaml names {account!r} as the "
-                "account apps grant access to; either the token or policy.yaml is wrong."
-            )
-    allowed, message = access(repo, cred.token, cred.uploader)
-    return allowed, (f"{message} It holds {cred.origin}." if allowed else message)
+    # Proved when the token was minted: GitHub refuses a token for a repository the installation
+    # does not cover, or a permission the app was not granted. The repository's own `permissions`
+    # block cannot answer it, since that block is a user's role and an app has none.
+    return True, f"{cred.uploader} can write to {repo}. It holds {cred.origin}."
 
 
 def cmd_check(args: argparse.Namespace) -> int:
-    account = args.account or str(policy().get("account") or "")
     cred, severity, why = resolve(args)
-    allowed, message = writable(args.repo, cred, why, account)
-    # The app was tried and something answered no, but a fallback carried the run. Saying so is
-    # how a key that stopped working is noticed before every repository has installed the app.
-    if cred is not None and why:
-        emit("notice", f"note {why}")
+    allowed, message = writable(args.repo, cred, why)
     if not allowed:
         emit(
             severity,
@@ -355,8 +322,6 @@ def promote(repo: str, tag: str, token: str, body: dict, dry_run: bool) -> None:
 
 
 def cmd_upload(args: argparse.Namespace) -> int:
-    account = args.account or str(policy().get("account") or "")
-    cred, severity, why = resolve(args)
     directory = Path(args.dir)
 
     if not args.flavor:
@@ -372,9 +337,10 @@ def cmd_upload(args: argparse.Namespace) -> int:
         emit("notice", f"nothing in {directory} for the catalog to attach to {args.repo} {args.tag}")
         return 0
 
-    allowed, message = writable(args.repo, cred, why, account)
-    if cred is not None and why:
-        emit("notice", f"note {why}")
+    # Only now, with something to attach: a token is minted for the run that needs it and for no
+    # other.
+    cred, severity, why = resolve(args)
+    allowed, message = writable(args.repo, cred, why)
     if not allowed or cred is None:
         emit(
             severity,
@@ -448,7 +414,6 @@ def main(argv: list[str] | None = None) -> int:
 
     remote = argparse.ArgumentParser(add_help=False)
     remote.add_argument("--repo", required=True, help="the app's repository, as owner/name")
-    remote.add_argument("--account", default="", help="the account that uploads (default: policy.yaml)")
     remote.add_argument(
         "--missing-access",
         choices=["warn", "error"],

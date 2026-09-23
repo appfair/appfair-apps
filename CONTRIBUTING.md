@@ -102,10 +102,6 @@ alone, for one hour. Nothing long-lived is held anywhere on your side or ours. A
 are uploaded by `app-fair-publisher[bot]`, which is also how the queue recognizes its own and leaves
 everything else on the release alone.
 
-A repository that granted the older `appfairbot` account write access keeps working: the queue
-uses the app where it is installed and that account where it is not. The checks report which one
-they found, in every pull request.
-
 Granting it is optional. Without it the app is still built, signed and published to the stores;
 the packages are left as the `release-assets-<token>-<tag>` artifact on the publish run, to
 attach by hand. That artifact is written on every run, whether or not the upload followed.
