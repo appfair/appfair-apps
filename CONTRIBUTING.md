@@ -78,6 +78,36 @@ are checked against the manifest it was built from.
 
 An app built with the shared Day workflow already publishes the base packages.
 
+## The listing's screenshots
+
+A walkthrough captures far more screens than a store listing shows. The `screenshot:` steps
+whose captures the listing uses say so with `store: N`, the position in the listing:
+
+```yaml
+- screenshot: { name: home, title: Home, store: 1 }
+- screenshot: { name: puzzle, title: Puzzle, store: 2 }
+- screenshot: puzzle-paused             # evidence for the walkthrough, not in the listing
+```
+
+One mark covers every locale, theme and device the walkthrough runs on. The app's site publishes
+the captures with their positions in `gallery.json`, the review comment shows exactly those, the
+checks hold them to the stores' rules, and the signing stage places them in the fastlane tree for
+every locale the store knows. The catalog takes the light theme (`policy.yaml`,
+`screenshots.theme`).
+
+What the checks require, per channel the submission names:
+
+| store | device | what it takes |
+|---|---|---|
+| App Store | iPhone, iPad | one of Apple's exact sizes per device; the CI profiles `iPhone * Pro Max` and `iPad Pro 13-inch` produce them (1320×2868, 2752×2064) |
+| Google Play | phone | 320 to 3840 px a side, the long side at most twice the short: a 9:16 profile such as `pixel`, since the default `medium_phone` is 20:9 and is refused |
+| Google Play | tablet | the same range; optional |
+
+Every locale the gallery carries needs at least one screenshot on each required device, or
+App Store Connect refuses the version for that language, and no more than the store's ceiling
+(10 for Apple, 8 for Google). A failure names the screenshot, its size, and the profile to
+capture on.
+
 ## Release access
 
 The App Fair attaches the packages it signed to that same release, beside the ones the

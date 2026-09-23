@@ -104,6 +104,42 @@ review:
 # `fastlane sigh`, so none are stored here. An app that needs a particular profile names the
 # secret holding it in its `apple-app-store: profile-secret`.
 
+# --- The listing's screenshots -----------------------------------------------------------------
+# A walkthrough marks the captures the listing uses with `store: N` on the screenshot step, and
+# the app's site publishes them in its gallery index. The review shows exactly those, and the
+# signing stage places them in the fastlane tree for every locale the store knows.
+#
+# What each store accepts, per device kind the walkthrough captures on. Apple takes exact sizes
+# (developer.apple.com/help/app-store-connect/reference/screenshot-specifications); Google takes
+# a range, with the long side at most twice the short one (support.google.com/googleplay/
+# android-developer/answer/9866151). `required` device kinds need at least one screenshot in
+# every locale of the listing; `max` is the store's ceiling per kind.
+screenshots:
+  # Of a walkthrough that captures both themes, the listing takes this one.
+  theme: light
+  apple-app-store:
+    iphone:
+      required: true
+      max: 10
+      sizes: [[1320, 2868], [2868, 1320], [1290, 2796], [2796, 1290], [1260, 2736], [2736, 1260]]
+    ipad:
+      required: true
+      max: 10
+      sizes: [[2064, 2752], [2752, 2064], [2048, 2732], [2732, 2048]]
+  google-play-store:
+    phone:
+      required: true
+      max: 8
+      min-side: 320
+      max-side: 3840
+      max-ratio: 2.0
+    tablet:
+      required: false
+      max: 8
+      min-side: 320
+      max-side: 3840
+      max-ratio: 2.0
+
 # --- The maintainer's release ----------------------------------------------------------------
 # The packages this queue signs are attached to the release the submission names, beside the ones
 # the maintainer published. They carry the build flavor in their names
@@ -171,3 +207,5 @@ app-data-paths:
   - store-*
   - resource/locales
   - resource-*/locales
+  # The site's host, which is where the listing's screenshots are read from.
+  - website/site.toml

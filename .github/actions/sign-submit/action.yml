@@ -346,9 +346,16 @@ runs:
         FLAVOR_ARGS: ${{ steps.flavor.outputs.args }}
       run: |
         set -euo pipefail
-        # `day store stage` generates the fastlane tree from the listing's text files. The
-        # Fastfile comes from day; the app supplies the copy and the screenshots.
-        (cd app-data && "$DAY_BIN" $FLAVOR_ARGS store stage)
+        # `day store stage` generates the fastlane tree from the listing's text files, and
+        # places the listing's screenshots from the app's published gallery: the captures the
+        # walkthrough marked `store: N`, for every locale, read from the site's latest build.
+        # The site's host is the one website/site.toml names; verify already required it.
+        HOST=$(python3 -c 'import tomllib,sys; print(tomllib.load(open(sys.argv[1], "rb")).get("host", "").rstrip("/"))' app-data/website/site.toml)
+        [ -n "$HOST" ] || { echo "::error::app-data/website/site.toml names no host, so the listing's screenshots cannot be read"; exit 1; }
+        (cd app-data && "$DAY_BIN" $FLAVOR_ARGS store stage \
+           --screenshots "$HOST/main/gallery/gallery.json")
+        echo "screenshots placed:"
+        find app-data/build/day/store -type f \( -name '*.png' -o -name '*.jpg' \) | sed 's|app-data/build/day/store/||' | sort | head -40
         find app-data/build/day/store -maxdepth 3 -type d | head -20
 
     - name: Upload to ${{ inputs.channel }} (${{ inputs.lane }})
