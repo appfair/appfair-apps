@@ -159,7 +159,7 @@ def credential(repo: str, conf: dict, account: str) -> tuple[Credential | None, 
     reasons = []
     pem = os.environ.get(APP_KEY_ENV, "")
     app_id = str(conf.get("app-id") or "")
-    slug = str(conf.get("app") or "app-fair")
+    slug = str(conf.get("app") or "app-fair-publisher")
     if pem and app_id:
         token, why = installation_token(repo, app_id, pem)
         if token:
@@ -177,7 +177,7 @@ def credential(repo: str, conf: dict, account: str) -> tuple[Credential | None, 
 def install_text(repo: str) -> str:
     """What the maintainer does to let the catalog attach its packages."""
     conf = policy()
-    slug = str(conf.get("app") or "app-fair")
+    slug = str(conf.get("app") or "app-fair-publisher")
     return (
         f"Install the App Fair app on {repo}: https://github.com/apps/{slug} -> Install -> this "
         "repository. It asks for Contents: Read and write, which is what attaches the catalog's "

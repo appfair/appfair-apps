@@ -92,14 +92,14 @@ games-fair-appfair-ios-uikit.ipa      the archive App Store Connect received
 ```
 
 It takes write access to the app's repository, which you grant by installing the **App Fair**
-GitHub App on it: <https://github.com/apps/app-fair> → Install → this repository. It asks for
+GitHub App on it: <https://github.com/apps/app-fair-publisher> → Install → this repository. It asks for
 `Contents: Read and write` and nothing else, it appears in your Settings → GitHub Apps with a
 Revoke button, and it is not a collaborator: it cannot open issues, review pull requests or touch
 anything but the repository's contents.
 
 Each publishing run signs as the app and asks GitHub for a token limited to your repository
 alone, for one hour. Nothing long-lived is held anywhere on your side or ours. Assets it attaches
-are uploaded by `app-fair[bot]`, which is also how the queue recognizes its own and leaves
+are uploaded by `app-fair-publisher[bot]`, which is also how the queue recognizes its own and leaves
 everything else on the release alone.
 
 A repository that granted the older `appfairbot` account write access keeps working: the queue

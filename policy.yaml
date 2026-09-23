@@ -119,8 +119,8 @@ release-upload:
   # The App Fair GitHub App, which a maintainer installs on their repository. The queue signs its
   # own requests with APPFAIR_APP_PRIVATE_KEY and this id, then mints a token for that repository
   # alone, for one hour, with Contents: Read and write. `app-id` empty leaves the app unused.
-  app: app-fair
-  app-id: ""
+  app: app-fair-publisher
+  app-id: "5040724"
   # The older way in, for a repository that granted this account write access before the app
   # existed. Used when the app is not installed there.
   account: appfairbot

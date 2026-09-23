@@ -14,9 +14,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
+import yaml  # noqa: E402
+
 import release_upload as ru  # noqa: E402
 
 ACCOUNT = "appfairbot"
+# The GitHub App a maintainer installs, as policy.yaml names it.
+APP = yaml.safe_load((ROOT / "policy.yaml").read_text())["release-upload"]["app"]
 
 
 class Fake:
@@ -138,7 +142,7 @@ class ReleaseUploadTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("warning", output)
         self.assertIn("cannot write to Games-Fair/Games-Fair", output)
-        self.assertIn("https://github.com/apps/app-fair", output)
+        self.assertIn(f"https://github.com/apps/{APP}", output)
         # A catalog that would rather stop says so in policy.yaml, or on the command line.
         code, _ = self.run_cli(
             "check", "--repo", "Games-Fair/Games-Fair", "--account", ACCOUNT, "--missing-access", "error"
@@ -197,7 +201,7 @@ class ReleaseUploadTests(unittest.TestCase):
     def with_app(self, **kwargs) -> Fake:
         """policy.yaml names the app; this run holds its key."""
         original = ru.policy
-        ru.policy = lambda: {**original(), "app-id": "1234567", "app": "app-fair"}
+        ru.policy = lambda: {**original(), "app-id": "1234567", "app": APP}
         self.addCleanup(lambda: setattr(ru, "policy", original))
         self.app_key()
         return self.github(**kwargs)
@@ -247,12 +251,12 @@ class ReleaseUploadTests(unittest.TestCase):
         code, output = self.run_cli("check", "--repo", "Games-Fair/Games-Fair")
         self.assertEqual(code, 0)
         self.assertIn("is not installed on Games-Fair/Games-Fair", output)
-        self.assertIn("https://github.com/apps/app-fair", output)
+        self.assertIn(f"https://github.com/apps/{APP}", output)
 
     def test_the_app_replaces_its_own_assets(self):
-        """Uploaded as app-fair[bot], so that is the login the rail recognizes."""
+        """Uploaded as <app>[bot], so that is the login the rail recognizes."""
         name = "games-fair-appfair-android-mdc.aab"
-        mine = {"id": 7, "assets": [{"id": 11, "name": name, "uploader": {"login": "app-fair[bot]"}}]}
+        mine = {"id": 7, "assets": [{"id": 11, "name": name, "uploader": {"login": f"{APP}[bot]"}}]}
         fake = self.with_app(release=mine)
         self.packages(name)
         code, output = self.run_cli(
