@@ -24,6 +24,7 @@ import os
 import re
 import subprocess
 import sys
+import tomllib
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -750,6 +751,13 @@ def cmd_verify(args: argparse.Namespace) -> int:
             f"({', '.join(sorted(declares)) or 'it declares none'})"
         )
 
+    # The review shows the reviewer the app's screenshots from the site the app publishes, and
+    # the stores show the same listing. Without the site there is nothing to review against.
+    if not getattr(args, "offline", False):
+        index, why = gallery_index(app, submitted)
+        if index is None:
+            bad(why)
+
     for problem in problems:
         problem.emit()
     if problems:
@@ -861,6 +869,157 @@ def fetch_text(owner_repo: str, ref: str, path: str) -> str | None:
             return response.read().decode().strip()
     except (urllib.error.HTTPError, OSError, UnicodeDecodeError):
         return None
+
+
+# The development channel's index: what the last deploy built. After a tag build that is the
+# tagged version itself, where the release channel keeps showing the version before it until the
+# pre-release is marked Latest.
+GALLERY_PATH = "main/gallery/gallery.json"
+# The comment has to stay under GitHub's limit for one comment (65,536 characters), with room
+# for the rest of the review. Past this, later locales fold to a link.
+COMMENT_BUDGET = 56_000
+OS_NAMES = {"ios": "iOS", "android": "Android"}
+DEVICE_NAMES = {"iphone": "iPhone", "ipad": "iPad", "phone": "Phone", "tablet": "Tablet"}
+LANGUAGE_NAMES = {
+    "ar": "Arabic", "de": "German", "en": "English", "es": "Spanish", "fr": "French",
+    "hi": "Hindi", "id": "Indonesian", "it": "Italian", "ja": "Japanese", "ko": "Korean",
+    "nl": "Dutch", "pl": "Polish", "pt": "Portuguese", "pt-BR": "Portuguese (Brazil)",
+    "ru": "Russian", "sv": "Swedish", "th": "Thai", "tr": "Turkish", "uk": "Ukrainian",
+    "vi": "Vietnamese", "zh-CN": "Chinese (Simplified)", "zh-TW": "Chinese (Traditional)",
+}
+
+
+def fetch_json(url: str) -> tuple[int, object]:
+    """A public URL, decoded. `(0, None)` when it could not be asked at all."""
+    import urllib.error
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(url, timeout=30) as response:  # noqa: S310
+            return response.status, json.loads(response.read())
+    except urllib.error.HTTPError as e:
+        return e.code, None
+    except (OSError, ValueError):
+        return 0, None
+
+
+def site_host(owner_repo: str, commit: str) -> str:
+    """The `host` the app's website/site.toml names at that commit, or an empty string."""
+    text = fetch_text(owner_repo, commit, "website/site.toml")
+    if not text:
+        return ""
+    try:
+        host = tomllib.loads(text).get("host")
+    except tomllib.TOMLDecodeError:
+        return ""
+    return str(host).rstrip("/") if host else ""
+
+
+def gallery_index(app: "App", commit: str) -> tuple[dict | None, str]:
+    """The screenshot index the app's website publishes, or why there is none.
+
+    The review shows the reviewer what the stores will show, from the site the app's own CI
+    publishes; the images are linked, never copied. A submission without a published site is
+    refused for that reason.
+    """
+    why = (
+        "An App Fair submission needs the app's website published, since the review reads its "
+        "screenshot index. The shared Day workflow publishes it from website/site.toml with "
+        "`deploy-web: true` (https://daybrite.dev/docs/ci)."
+    )
+    host = site_host(app.owner_repo, commit)
+    if not host:
+        return None, f"{app.owner_repo} has no website/site.toml naming a host at {commit[:7]}. {why}"
+    url = f"{host}/{GALLERY_PATH}"
+    status, body = fetch_json(url)
+    if status != 200 or not isinstance(body, dict) or not isinstance(body.get("screenshots"), list):
+        return None, f"{url} could not be read ({status or 'no answer'}). {why}"
+    return body, url
+
+
+def screenshot_groups(index: dict) -> list[tuple[tuple[str, str, str, str], list[dict]]]:
+    """The mobile screenshots, grouped by platform, device, theme and language, in review order:
+    iOS before Android, phones before tablets, light before dark, the site's default language
+    first."""
+    order_os = ["ios", "android"]
+    order_device = ["iphone", "ipad", "phone", "tablet"]
+    order_theme = ["light", "dark"]
+    order_locale = list(index.get("locales") or [])
+    groups: dict[tuple[str, str, str, str], list[dict]] = {}
+    for shot in index.get("screenshots") or []:
+        if shot.get("os") not in order_os or not shot.get("url"):
+            continue
+        key = (str(shot["os"]), str(shot.get("device", "")), str(shot.get("theme", "")), str(shot.get("locale", "")))
+        groups.setdefault(key, []).append(shot)
+
+    def rank(key):
+        os_, device, theme, locale = key
+        return (
+            order_os.index(os_),
+            order_device.index(device) if device in order_device else len(order_device),
+            order_theme.index(theme) if theme in order_theme else len(order_theme),
+            order_locale.index(locale) if locale in order_locale else len(order_locale),
+            locale,
+        )
+
+    return [(key, sorted(groups[key], key=lambda s: str(s.get("shot", "")))) for key in sorted(groups, key=rank)]
+
+
+def screenshot_section(index: dict, url: str, budget: int = COMMENT_BUDGET) -> str:
+    """The screenshots as folded blocks, one per platform, device, theme and language.
+
+    Every block lists its images at thumbnail size, linked to the full capture. When the whole
+    set would not fit in one comment, later languages keep their block but link to the gallery
+    page instead of inlining, and the block says so.
+    """
+    site = str(index.get("site") or url.rsplit("/", 2)[0]).rstrip("/")
+    groups = screenshot_groups(index)
+    if not groups:
+        return f"No iOS or Android screenshots in the [published gallery]({url})."
+
+    def summary(key, count):
+        os_, device, theme, locale = key
+        return (
+            f"{OS_NAMES.get(os_, os_)} screenshots ({DEVICE_NAMES.get(device, device or 'device')}, "
+            f"{theme or 'default'}, {LANGUAGE_NAMES.get(locale, locale or 'default')}) · {count}"
+        )
+
+    def inline(key, shots):
+        images = " ".join(
+            f'<img src="{s["url"]}" width="120" alt="{s.get("title") or s.get("shot") or ""}">'
+            for s in shots
+        )
+        return f"<details><summary>{summary(key, len(shots))}</summary>\n\n<p>{images}</p>\n</details>"
+
+    def folded(key, shots):
+        locale = key[3]
+        page = f"{site}/{locale}/main/gallery/" if locale else f"{site}/main/gallery/"
+        return (
+            f"<details><summary>{summary(key, len(shots))}</summary>\n\n"
+            f"Not inlined, to keep this comment under GitHub's size limit: [open the gallery]({page}).\n"
+            f"</details>"
+        )
+
+    generated = str(index.get("generated") or "")[:10]
+    head = f"Screenshots from the site's [latest build]({url})" + (f", generated {generated}" if generated else "") + ":"
+    blocks = [inline(key, shots) for key, shots in groups]
+    # Fold until the section fits, least useful first: other languages before the site's
+    # default, dark before light, tablets before phones. Every group keeps its heading, so the
+    # reviewer still sees what exists and where.
+    locales = list(index.get("locales") or [])
+    def fold_rank(i):
+        os_, device, theme, locale = groups[i][0]
+        return (
+            -(locales.index(locale) if locale in locales else len(locales)),
+            0 if theme == "dark" else 1,
+            0 if device in ("ipad", "tablet") else 1,
+            -i,
+        )
+    for i in sorted(range(len(groups)), key=fold_rank):
+        if len("\n\n".join([head] + blocks)) <= budget:
+            break
+        blocks[i] = folded(*groups[i])
+    return "\n\n".join([head] + blocks)
 
 
 def app_title(owner_repo: str, commit: str, token: str, flavor: str) -> str:
@@ -1224,7 +1383,11 @@ def cmd_review(args: argparse.Namespace) -> int:
         commit = str(app.data.get("commit", ""))
         if previous and was_commit and commit and was_commit != commit and not args.offline:
             stats = compare_stats(app.owner_repo, was_commit, commit)
-        sections.append(review_section(app, previous, policy, stats, asked=not args.offline))
+        section = review_section(app, previous, policy, stats, asked=not args.offline)
+        if not args.offline:
+            index, url = gallery_index(app, commit)
+            section += "\n\n" + (screenshot_section(index, url) if index else url)
+        sections.append(section)
 
     body = review_body(sections)
     if args.out:
@@ -2292,6 +2455,47 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
             failures += 1
             print("FAIL a re-pinned submission claimed a source change")
 
+    # The screenshots in the comment come from the app's published gallery. A synthetic index
+    # stands in for the site, so this runs offline.
+    def shot(os_, device, theme, locale, name):
+        return {"os": os_, "device": device, "theme": theme, "locale": locale, "shot": name,
+                "title": name.title(), "url": f"https://example.test/App/gallery/{os_}/{device}/{theme}/{locale}/{name}.png"}
+    index = {
+        "site": "https://example.test/App", "generated": "2026-09-23T05:01:54Z",
+        "locales": ["en", "fr"],
+        "screenshots": [
+            shot("android", "phone", "dark", "en", "home"), shot("ios", "iphone", "light", "fr", "home"),
+            shot("ios", "iphone", "light", "en", "home"), shot("ios", "iphone", "light", "en", "about"),
+            shot("linux", "desktop", "light", "en", "home"),
+        ],
+    }
+    section = screenshot_section(index, "https://example.test/App/gallery/gallery.json")
+    headings = [line[len("<details><summary>"):line.index("</summary>")]
+                for line in section.splitlines() if line.startswith("<details><summary>")]
+    wanted = [
+        "iOS screenshots (iPhone, light, English) · 2",
+        "iOS screenshots (iPhone, light, French) · 1",
+        "Android screenshots (Phone, dark, English) · 1",
+    ]
+    if headings == wanted and "linux" not in section and '<img src="https://example.test/App/gallery/ios/iphone/light/en/about.png"' in section:
+        print("ok   the comment groups the mobile screenshots by platform, device, theme and language")
+    else:
+        failures += 1
+        print(f"FAIL the screenshot groups came out as {headings}")
+    tight = screenshot_section(index, "https://example.test/App/gallery/gallery.json", budget=400)
+    if tight.count("Not inlined") >= 1 and "[open the gallery](https://example.test/App/fr/main/gallery/)" in tight and headings[0] in tight:
+        print("ok   past the comment's size budget, other languages fold to a link and keep their heading")
+    else:
+        failures += 1
+        print("FAIL folding for size did not keep the headings or link the gallery page")
+    # No published site: the message says what to publish and how.
+    missing, why = gallery_index(App(path=Path("apps/Nowhere.yaml"), data={"token": "Nowhere"}), "0" * 40)
+    if missing is None and "website/site.toml" in why and "deploy-web" in why:
+        print("ok   a submission without a published website is told what the review needs")
+    else:
+        failures += 1
+        print(f"FAIL the missing-site message was: {why}")
+
     # The flavor follows this catalog's name, so a fork builds its own without editing anything.
     expected = ROOT.name.removesuffix("-apps")
     if policy.flavor == expected:
@@ -2357,6 +2561,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--app", required=True, help="the app token")
     p.add_argument("--metadata", required=True, help="`day metadata --json` output")
     p.add_argument("--tag-commit", help="what the tag points at now, for the pin check")
+    p.add_argument("--offline", action="store_true", help="skip the published-site check")
     p.set_defaults(func=cmd_verify)
 
     p = sub.add_parser("add", help="write a new submission from what an app has released")

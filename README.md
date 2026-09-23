@@ -132,7 +132,8 @@ submission.
 ## What each side supplies
 
 **The maintainer** supplies a public Day project with a release tag, the canonical bundle id and a
-build number above what the stores already have, a store listing, and an app that meets the
+build number above what the stores already have, a store listing, a published website whose
+gallery the review reads its screenshots from, and an app that meets the
 [inclusion criteria](https://appfair.org/docs/inclusion-criteria/). The base release used for the
 comparison comes from the app's own CI, so its existing release workflow is enough and the App
 Fair's own packages never have to be published. The maintainer also grants the catalog's account

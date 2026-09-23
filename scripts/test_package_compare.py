@@ -219,7 +219,7 @@ class ComparisonTests(unittest.TestCase):
         path = self.root / "metadata.json"
         meta = metadata(True)
         path.write_text(json.dumps(meta))
-        args = argparse.Namespace(app="Faire-Games", metadata=str(path), tag_commit="a" * 40)
+        args = argparse.Namespace(app="Faire-Games", metadata=str(path), tag_commit="a" * 40, offline=True)
         with patch.object(queue, "catalog", return_value=[app]), patch.dict(
             "os.environ", {"GITHUB_REPOSITORY": "appfair/appfair-apps"}
         ), contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
@@ -260,7 +260,7 @@ class ComparisonTests(unittest.TestCase):
             "token": "Games-Fair", "title": "Games Fair", "tag": "v1.9.0", "commit": "a" * 40,
             "id": "org.appfair.app.Faire-Games",
             "distribution": {"ios-uikit": ["apple-app-store"], "android-mdc": ["google-play-store"]}})
-        args = argparse.Namespace(app="Games-Fair", metadata=str(path), tag_commit="a" * 40)
+        args = argparse.Namespace(app="Games-Fair", metadata=str(path), tag_commit="a" * 40, offline=True)
         with patch.object(queue, "catalog", return_value=[app]), patch.dict(
             "os.environ", {"GITHUB_REPOSITORY": "appfair/appfair-apps"}
         ), contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
