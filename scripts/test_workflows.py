@@ -5,7 +5,10 @@ the pull request merges once the stores have taken it. These are the properties 
 on, read from the workflows themselves.
 """
 
+import contextlib
+import io
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -95,6 +98,11 @@ class RecordTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
+        # A case that exercises a failure path prints the annotation that failure would print,
+        # and a test run inside Actions would hang it on the job as a real error.
+        was = os.environ.pop("GITHUB_ACTIONS", None)
+        if was is not None:
+            self.addCleanup(lambda: os.environ.__setitem__("GITHUB_ACTIONS", was))
         state = Path(self.temp.name) / "published.json"
         original = catalog.STATE
         catalog.STATE = state
@@ -102,8 +110,11 @@ class RecordTests(unittest.TestCase):
         self.state = state
 
     def record(self, **kwargs):
+        """The command's exit code; what it prints belongs to the command, not to this log."""
         fields = {"app": "", "matrix": "", "tag": "", "channels": "", "run_url": "https://example/run"}
-        return catalog.cmd_record(catalog.argparse.Namespace(**{**fields, **kwargs}))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            return catalog.cmd_record(catalog.argparse.Namespace(**{**fields, **kwargs}))
 
     def test_every_row_of_the_matrix_is_recorded(self):
         token = next(app.token for app in catalog.catalog())

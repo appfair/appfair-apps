@@ -146,14 +146,25 @@ class Policy:
 
 @dataclass
 class Problem:
-    """One problem with one submission, in the form an annotation takes."""
+    """One problem, in the form an annotation takes.
+
+    `file` is a path when the problem is in one, and a label such as `plan` or `record` when it
+    is not. Only a path becomes `file=`: GitHub renders that field as a location, so a label
+    there hangs the annotation off a file nobody can open.
+    """
 
     file: str
     message: str
 
+    def annotation(self) -> str:
+        where = self.file
+        if "/" in where or Path(where).suffix:
+            return f"::error file={where}::{self.message}"
+        return f"::error::{where}: {self.message}"
+
     def emit(self) -> None:
         if os.environ.get("GITHUB_ACTIONS"):
-            print(f"::error file={self.file}::{self.message}")
+            print(self.annotation())
         else:
             print(f"{self.file}: {self.message}", file=sys.stderr)
 
@@ -1087,6 +1098,11 @@ def other_changes(previous: dict, current: dict) -> list[str]:
     return sorted(key for key in keys if previous.get(key) != current.get(key))
 
 
+def plural(count: int, noun: str) -> str:
+    """`1 commit`, `4 commits`. The comment is read by people, not parsed."""
+    return f"{count} {noun}" if count == 1 else f"{count} {noun}s"
+
+
 def review_section(
     app: App, previous: dict | None, policy: Policy, stats: dict | None, asked: bool = True
 ) -> str:
@@ -1104,11 +1120,11 @@ def review_section(
         lines += [
             f"First submission, at `{tag}`.",
             "",
-            f"- [The source at that commit]({url}/tree/{commit})",
-            f"- [Release notes for {tag}]({url}/releases/tag/{tag})",
+            f"- [Source at `{commit[:7]}`]({url}/tree/{commit})",
+            f"- [Release notes]({url}/releases/tag/{tag})",
             "",
-            "No version of this app has been published, so the review covers the repository as a"
-            " whole.",
+            "Nothing from this app has been published before, so there is no range to read."
+            " Review the repository as it stands.",
         ]
         return "\n".join(lines)
 
@@ -1117,65 +1133,64 @@ def review_section(
     changed = other_changes(previous, data)
 
     if was_commit == commit:
-        lines.append(f"Still at `{tag}`, so the app's source is unchanged.")
+        lines.append(f"Same tag and commit as the published `{tag}`, so the source is unchanged.")
         lines.append("")
         lines.append(
-            "This pull request changes " + ", ".join(f"`{key}`" for key in changed) + "."
+            "This file changes " + ", ".join(f"`{key}`" for key in changed) + "."
             if changed
-            else "Nothing in this file changed."
+            else "Nothing else in the file changed."
         )
         return "\n".join(lines)
 
     lines += [
         f"`{was_tag}` → `{tag}`",
         "",
-        f"- [The source changes between the two commits]"
+        f"- [Source diff `{was_commit[:7]}…{commit[:7]}`]"
         f"({url}/compare/{was_commit}...{commit})",
-        f"- [Release notes for {tag}]({url}/releases/tag/{tag})",
+        f"- [Release notes]({url}/releases/tag/{tag})",
     ]
 
     if stats:
         count = stats["total_commits"] or stats["commits"]
         lines[-2] += (
-            f": {count} commit(s), {stats['file_count']} file(s), "
+            f": {plural(count, 'commit')}, {plural(stats['file_count'], 'file')}, "
             f"+{stats['additions']} −{stats['deletions']}"
         )
         if stats["file_count"] >= 100:
             lines[-2] += " (GitHub lists the first 100 files)"
         picked, rest = highlights(stats["files"], policy)
         if picked:
-            lines += ["", "Build and packaging files in that range:", ""]
+            lines += ["", "Build and packaging files touched:", ""]
             lines += [f"- `{name}`" for name in picked]
             if rest:
                 lines.append(f"- …and {rest} more")
         # GitHub answers `ahead` when the proposed commit continues the published one.
         # Anything else is worth a reviewer's attention before the range is read.
         warning = {
-            "diverged": f"**The two commits have diverged.** {stats['behind_by']} commit(s) in"
-            " the published release are missing from this one, so the app's history was"
-            " rewritten or the tag moved to another line of development.",
-            "behind": f"**The proposed commit is {stats['behind_by']} commit(s) behind the"
-            " published one**, so this submission would publish older source than the release"
-            " already out.",
-            "identical": "**The proposed commit is the published one.**",
+            "diverged": "**These two commits have diverged.** "
+            f"{plural(stats['behind_by'], 'commit')} from the published release are missing here,"
+            " so the history was rewritten or the tag moved to another branch.",
+            "behind": f"**This commit is {plural(stats['behind_by'], 'commit')} behind the"
+            " published one**, so merging would publish older source than what is already out.",
+            "identical": "**This is the commit already published.**",
         }.get(stats["status"])
         if warning:
             lines += ["", warning]
     elif asked:
-        lines += ["", "GitHub did not answer with the range, so the link above is all there is."]
+        lines += ["", "GitHub did not return the range, so the link above is all there is."]
 
     if changed:
         named = ", ".join(f"`{key}`" for key in changed)
-        lines += ["", f"This pull request also changes {named}."]
+        lines += ["", f"The submission file also changes {named}."]
     return "\n".join(lines)
 
 
 def review_body(sections: list[str]) -> str:
     """The comment itself, with the marker the workflow finds it by."""
     return "\n\n".join(
-        [REVIEW_MARKER, "## What this pull request publishes"]
+        [REVIEW_MARKER, "## Submissions"]
         + sections
-        + ["*Rewritten on every push to this pull request.*"]
+        + ["*Updated on every push.*"]
     ) + "\n"
 
 
@@ -2252,7 +2267,7 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
         wanted = [
             f"{previous['commit']}..." + "b" * 40,
             "`v1.9.0` → `v2.0.1`",
-            "4 commit(s), 2 file(s), +62 −78",
+            "4 commits, 2 files, +62 −78",
             "`build.rs`",
         ]
         missing = [w for w in wanted if w not in section]
