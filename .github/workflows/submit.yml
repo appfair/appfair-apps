@@ -1,5 +1,6 @@
 # Stage C, as one workflow both callers use: sign each validated package, submit it to its
-# channel, and attach the signed packages to the app's own release.
+# channel, and attach it to the app's own release. All of that in one job per channel, so the
+# reviewer who releases the submission is asked once and not once per store.
 #
 # The pull request calls it behind the `store` environment, whose reviewers decide when a
 # submission goes out; publish.yml calls it for a re-run of one app. Nothing here runs the app's
@@ -30,8 +31,10 @@ jobs:
       contents: read
     strategy:
       fail-fast: false
-      # One at a time, so two merges cannot race into one store record.
-      max-parallel: 1
+      # Every channel at once, which is also what makes this one approval rather than one per
+      # store: a reviewer releases the jobs that are waiting when they answer, and a job that
+      # starts waiting later asks again. The channels are different stores, so there is nothing
+      # to serialize; two runs racing is what `concurrency` is for, one job at a time is not.
       matrix: ${{ fromJSON(inputs.publish-matrix) }}
     steps:
       - uses: actions/checkout@v7
@@ -71,21 +74,27 @@ jobs:
           asc-key-id: ${{ secrets.DAY_ASC_KEY_ID }}
           asc-issuer: ${{ secrets.DAY_ASC_ISSUER }}
           asc-key-b64: ${{ secrets.DAY_ASC_KEY_B64 }}
+      # Attaching happens here rather than in a job of its own: a later job in this environment
+      # would wait for a second approval, for work the reviewer has already released. Each leg
+      # attaches the packages it just signed, so the release ends up with all of them.
+      - name: Attach this target's packages to ${{ matrix.tag }}
+        env:
+          # The App Fair app signs for itself and mints a token for the app's repository
+          # alone, for an hour.
+          APPFAIR_APP_PRIVATE_KEY: ${{ secrets.APPFAIR_APP_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          python3 scripts/release_upload.py stage --dir packages --out release-assets
+          python3 scripts/release_upload.py upload \
+            --repo "${{ matrix.repo }}" --tag "${{ matrix.tag }}" --dir release-assets
 
-  # The signed packages: kept as an artifact, then attached to the app's own release beside the
-  # maintainer's. They carry the flavor in their names, so nothing published there is replaced,
-  # and a release that is still a pre-release becomes the latest one once they are all on it.
-  # An app that granted the catalog no access is a warning here, not a failure.
-  attach:
-    name: attach ${{ matrix.token }}
+  # What was signed, kept where a human can reach it: an app that installed nothing still has its
+  # packages here to attach by hand. No keys, so no approval.
+  keep:
+    name: keep ${{ matrix.token }}
     needs: [publish]
     if: ${{ !cancelled() && needs.publish.result == 'success' }}
     runs-on: ubuntu-latest
-    # The same environment the signing job names, because the App Fair app's private key lives
-    # there: it mints write tokens on other people's repositories, so it is held where the store
-    # keys are rather than where any workflow in this repository could read it. The approval is
-    # already spent by the time this runs.
-    environment: store
     permissions:
       contents: read
     strategy:
@@ -100,22 +109,10 @@ jobs:
           path: packages
           merge-multiple: true
       - name: Gather them under their published names
-        run: |
-          python3 scripts/release_upload.py stage \
-            --dir packages --out release-assets
-      # Before the upload, and whatever the upload does: an app that granted no access still has
-      # its signed packages here to attach by hand.
+        run: python3 scripts/release_upload.py stage --dir packages --out release-assets
       - name: Keep them as an artifact
         uses: actions/upload-artifact@v7
         with:
           name: release-assets-${{ matrix.token }}-${{ matrix.tag }}
           path: release-assets
           if-no-files-found: ignore
-      - name: Attach them to ${{ matrix.tag }}
-        env:
-          # The App Fair app signs for itself and mints a token for the app's repository
-          # alone, for an hour.
-          APPFAIR_APP_PRIVATE_KEY: ${{ secrets.APPFAIR_APP_PRIVATE_KEY }}
-        run: |
-          python3 scripts/release_upload.py upload \
-            --repo "${{ matrix.repo }}" --tag "${{ matrix.tag }}"

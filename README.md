@@ -41,8 +41,8 @@ that, so the pipeline splits into three jobs along that boundary.
 |---|---|---|---|
 | **A, build** | checks the app out at the commit, lints it, packs it **unsigned** for each target | yes | no |
 | **B, validate** | reads the packages: inventory and digests, permissions against the manifest, provenance against the commit, comparison against the app's own release, virus scan | no | no |
-| **C, sign and submit** | signs the package with the App Fair's keys and uploads it to each channel | no | yes |
-| **attach** | keeps the signed packages as a run artifact, then puts them on the app's own release beside the maintainer's | no | yes |
+| **C, sign and submit** | signs the package with the App Fair's keys, uploads it to each channel, and attaches it to the app's own release beside the maintainer's | no | yes |
+| **keep** | leaves the signed packages as a run artifact | no | no |
 | **merge** | merges the pull request and records the publication | no | no |
 
 Stage A hands its packages to stage B, which opens them as archives. Stage C re-signs an archive

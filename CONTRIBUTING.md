@@ -306,8 +306,9 @@ An App Fair maintainer approves the submission in the pull request's own run, wh
   without rebuilding it, and uploads it through the fastlane lanes `day store stage` generates
   from the app's listing. The key material is named on the command line from this repository's
   secrets, so the app's own `[signing]` tables are not read.
-- **The attachment** puts the signed packages on the app's own release beside the maintainer's,
-  and marks a staged pre-release as the latest release.
+- **The attachment** happens in the same job: the signed packages go on the app's own release
+  beside the maintainer's, and a staged pre-release becomes the latest release. One approval
+  covers every store the app publishes to.
 - **The merge** closes the pull request, and **the record** is written to `state/published.json`:
   what was published, from which tag, by which run.
 

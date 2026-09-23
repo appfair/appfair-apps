@@ -51,6 +51,12 @@ class FlowTests(unittest.TestCase):
                 WORKFLOWS[name]["jobs"]["submit"]["uses"], "./.github/workflows/submit.yml", name
             )
 
+    def test_one_approval_covers_every_channel(self):
+        """A matrix leg that starts waiting later raises its own approval request, which is what
+        `max-parallel: 1` used to cause: one prompt per store."""
+        publish = WORKFLOWS["submit"]["jobs"]["publish"]["strategy"]
+        self.assertNotIn("max-parallel", publish)
+
     def test_the_merge_waits_for_every_channel(self):
         merge = WORKFLOWS["pr"]["jobs"]["merge"]
         self.assertIn("needs.submit.result == 'success'", merge["if"])
@@ -66,13 +72,13 @@ class FlowTests(unittest.TestCase):
         names = [step.get("name") for step in steps]
         self.assertLess(names.index("Merge this pull request"), names.index("Record the publication"))
 
-    def test_only_the_jobs_that_need_keys_are_in_the_environment(self):
-        """Stage A runs the app's code, so the environment must not reach it. The signing job
-        holds the store keys, and the attach job the app's private key, which mints write tokens
-        on other people's repositories; no job outside the environment may read either."""
+    def test_only_the_job_that_needs_keys_is_in_the_environment(self):
+        """Stage A runs the app's code, so the environment must not reach it. One job holds the
+        store keys and the app's private key, and it is the only one: a second job in the same
+        environment would ask the reviewer to approve again, for work they already released."""
         gated = {(name, job) for name, workflow in WORKFLOWS.items()
                  for job, spec in workflow["jobs"].items() if "environment" in spec}
-        self.assertEqual(gated, {("submit", "publish"), ("submit", "attach")})
+        self.assertEqual(gated, {("submit", "publish")})
 
     def test_the_app_key_is_read_only_inside_the_environment(self):
         """A repository secret is readable by any workflow here, including one on a branch."""
