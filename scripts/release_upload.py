@@ -9,7 +9,7 @@ the ones the maintainer published, named with the build flavor:
     games-fair-appfair-android-mdc.aab   the App Fair's, attached by `upload`
 
     release_upload.py check  --repo Games-Fair/Games-Fair [--tag v2.1.1]
-    release_upload.py stage  --dir packages --flavor appfair --out release-assets
+    release_upload.py stage  --dir packages --out release-assets
     release_upload.py upload --repo Games-Fair/Games-Fair --tag v2.1.1 --dir release-assets
 
 `check` asks whether the app is installed on the repository and says how to install it when it
@@ -251,20 +251,19 @@ def cmd_check(args: argparse.Namespace) -> int:
     return 0
 
 
-def attachable(directory: Path, flavor: str) -> tuple[list[Path], list[str]]:
-    """The packages to attach, and what was left out of `directory` and why."""
-    skipped: list[str] = []
-    found: list[Path] = []
-    for path in sorted(p for p in directory.iterdir() if p.is_file()):
-        if path.suffix.lower() not in PACKAGES:
-            continue
-        # The rail: an asset the catalog attaches carries the flavor, so it can never take the
-        # name of a package the maintainer published.
-        if f"-{flavor}-" not in path.name:
-            skipped.append(f"{path.name} (no -{flavor}- in its name)")
-            continue
-        found.append(path)
-    return found, skipped
+def attachable(directory: Path) -> list[Path]:
+    """The packages in `directory`, which holds this run's build and nothing else.
+
+    Selection is by format alone. What keeps the catalog off the maintainer's assets is the
+    release itself: a name already there from another uploader is refused at upload time. An
+    earlier version of this required the flavor in the name, which quietly attached nothing for
+    an app whose flavor names its own artifact, as the documented example does.
+    """
+    return [
+        path
+        for path in sorted(p for p in directory.iterdir() if p.is_file())
+        if path.suffix.lower() in PACKAGES
+    ]
 
 
 def cmd_stage(args: argparse.Namespace) -> int:
@@ -275,25 +274,16 @@ def cmd_stage(args: argparse.Namespace) -> int:
     """
     source = Path(args.dir)
     out = Path(args.out)
-    if not args.flavor:
-        emit("notice", "this app builds no flavor, so the catalog has nothing of its own to stage")
-        return 0
     if not source.is_dir():
         emit("error", f"{source} is not a directory, so there is nothing to stage")
         return 1
-    found, skipped = attachable(source, args.flavor)
-    for note in skipped:
-        emit("notice", f"skipped {note}")
+    found = attachable(source)
     out.mkdir(parents=True, exist_ok=True)
     for path in found:
         shutil.copy2(path, out / published_name(path.name))
         emit("notice", f"staged {published_name(path.name)}")
     if not found:
-        emit(
-            "notice",
-            f"no package here carries -{args.flavor}-, so this app was built as it stands and the "
-            "catalog has nothing of its own to publish",
-        )
+        emit("notice", f"{source} holds no package to stage")
     return 0
 
 
@@ -323,29 +313,19 @@ def promote(repo: str, tag: str, token: str, body: dict, dry_run: bool) -> None:
 
 def cmd_upload(args: argparse.Namespace) -> int:
     directory = Path(args.dir)
-
-    if not args.flavor:
-        emit("notice", f"{args.repo} builds no flavor, so the catalog has nothing of its own to attach")
-        return 0
     if not directory.is_dir():
         emit("error", f"{directory} is not a directory, so there are no packages to attach")
         return 1
-    found, skipped = attachable(directory, args.flavor)
-    for note in skipped:
-        emit("notice", f"skipped {note}")
-    if not found:
-        emit("notice", f"nothing in {directory} for the catalog to attach to {args.repo} {args.tag}")
-        return 0
+    found = attachable(directory)
 
-    # Only now, with something to attach: a token is minted for the run that needs it and for no
-    # other.
     cred, severity, why = resolve(args)
     allowed, message = writable(args.repo, cred, why)
     if not allowed or cred is None:
         emit(
             severity,
             f"{message} The {len(found)} signed package(s) are in this run's artifacts instead, "
-            f"to attach to {args.repo} {args.tag} by hand.",
+            f"to attach to {args.repo} {args.tag} by hand. A release still marked pre-release "
+            "stays one, so releases/latest keeps answering with the version before it.",
         )
         return 1 if severity == "error" else 0
     emit("notice", f"ok   {message}")
@@ -358,18 +338,17 @@ def cmd_upload(args: argparse.Namespace) -> int:
     release_id = body.get("id")
 
     attached: list[tuple[str, int]] = []
+    refused: list[str] = []
     for path in found:
         name = published_name(path.name)
         old = existing.get(name)
         if old is not None:
             uploader = ((old.get("uploader") or {}).get("login") or "").lower()
             if uploader != cred.uploader.lower():
-                emit(
-                    severity,
-                    f"{name} is already on {args.tag} and was uploaded by {uploader or 'someone else'}; "
-                    "the App Fair replaces only its own assets",
-                )
-                return 1 if severity == "error" else 0
+                # The app's own build produces this name, so the catalog's package cannot go
+                # beside it. Reported once at the end, with what to change.
+                refused.append(f"{name} (uploaded by {uploader or 'someone else'})")
+                continue
             if args.dry_run:
                 emit("notice", f"would replace {name}")
             else:
@@ -396,7 +375,18 @@ def cmd_upload(args: argparse.Namespace) -> int:
         attached.append((name, path.stat().st_size))
         emit("notice", f"ok   attached {name}")
 
-    # Every package is on the release, so a pre-release can become the one `latest` points at.
+    if refused:
+        emit(
+            severity,
+            f"{len(refused)} package(s) carry names {args.tag} already has: {', '.join(refused)}. "
+            "The catalog replaces only its own assets. Give the App Fair build a name of its own "
+            "with `artifact` in Day-<flavor>.toml, or leave the flavor's artifact unset so the "
+            "flavor's name is appended.",
+        )
+
+    # Whatever came of the attachment, this version is the one the catalog published, so a
+    # release still marked pre-release becomes the current one. Tying this to a successful
+    # attachment would leave a staged release pre-release for good.
     if policy().get("promote-prerelease", True):
         promote(args.repo, args.tag, cred.token, body, args.dry_run)
 
@@ -405,7 +395,7 @@ def cmd_upload(args: argparse.Namespace) -> int:
         lines = [f"### Attached to {args.repo} {args.tag}", "", "| asset | size |", "|---|---|"]
         lines += [f"| `{name}` | {size} |" for name, size in attached]
         Path(summary).open("a").write("\n".join(lines) + "\n")
-    return 0
+    return 1 if refused and severity == "error" else 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -428,13 +418,11 @@ def main(argv: list[str] | None = None) -> int:
     stage = sub.add_parser("stage", help="gather the packages under their published names")
     stage.add_argument("--dir", default="packages", help="the directory the build left them in")
     stage.add_argument("--out", default="release-assets", help="where to gather them")
-    stage.add_argument("--flavor", default="", help="the build flavor their names carry")
     stage.set_defaults(func=cmd_stage)
 
     upload = sub.add_parser("upload", parents=[remote], help="attach the signed packages")
     upload.add_argument("--tag", required=True, help="the released tag they belong to")
     upload.add_argument("--dir", default="release-assets", help="the directory holding them")
-    upload.add_argument("--flavor", default="", help="the build flavor their names carry")
     upload.add_argument("--dry-run", action="store_true", help="say what would be attached")
     upload.set_defaults(func=cmd_upload)
 

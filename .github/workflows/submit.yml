@@ -81,6 +81,11 @@ jobs:
     needs: [publish]
     if: ${{ !cancelled() && needs.publish.result == 'success' }}
     runs-on: ubuntu-latest
+    # The same environment the signing job names, because the App Fair app's private key lives
+    # there: it mints write tokens on other people's repositories, so it is held where the store
+    # keys are rather than where any workflow in this repository could read it. The approval is
+    # already spent by the time this runs.
+    environment: store
     permissions:
       contents: read
     strategy:
@@ -97,7 +102,7 @@ jobs:
       - name: Gather them under their published names
         run: |
           python3 scripts/release_upload.py stage \
-            --dir packages --out release-assets --flavor "${{ matrix.flavor }}"
+            --dir packages --out release-assets
       # Before the upload, and whatever the upload does: an app that granted no access still has
       # its signed packages here to attach by hand.
       - name: Keep them as an artifact
@@ -113,5 +118,4 @@ jobs:
           APPFAIR_APP_PRIVATE_KEY: ${{ secrets.APPFAIR_APP_PRIVATE_KEY }}
         run: |
           python3 scripts/release_upload.py upload \
-            --repo "${{ matrix.repo }}" --tag "${{ matrix.tag }}" \
-            --dir release-assets --flavor "${{ matrix.flavor }}"
+            --repo "${{ matrix.repo }}" --tag "${{ matrix.tag }}"

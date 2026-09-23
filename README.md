@@ -273,7 +273,8 @@ These settings live in the repository rather than in a file:
   must admit `daybrite/*`.
 - **The App Fair GitHub App**, owned by this organization, with `Contents: Read and write` and
   no webhook. Its numeric id goes in `policy.yaml` (`release-upload.app-id`) and its private key
-  in `APPFAIR_APP_PRIVATE_KEY`. Each app's maintainer installs it on their repository, and the
+  in the `store` environment as `APPFAIR_APP_PRIVATE_KEY`, beside the signing material, since it
+  mints write tokens on other people's repositories. Each app's maintainer installs it on their repository, and the
   publishing run mints a one-hour token for that repository alone.
 - **A `store` environment with required reviewers.** The signing job names it, which keeps the
   store secrets off the repository and is where a submission is approved: the run waits until one

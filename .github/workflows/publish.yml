@@ -121,30 +121,6 @@ jobs:
           python3 scripts/queue.py verify --app "${{ matrix.token }}" --metadata metadata.json \
             --tag-commit "${TAG_COMMIT:-}"
 
-  # The write access the catalog attaches its signed packages with (policy.yaml
-  # `release-upload`), reported before anything is built rather than after an hour of signing.
-  # It does not gate the publication: without it the packages stay a workflow artifact.
-  access:
-    name: access ${{ matrix.token }}
-    needs: plan
-    if: needs.plan.outputs.count != '0'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
-    steps:
-      - uses: actions/checkout@v7
-      - name: Check the release access
-        env:
-          # The App Fair app signs for itself and mints a token for the app's repository
-          # alone, for an hour.
-          APPFAIR_APP_PRIVATE_KEY: ${{ secrets.APPFAIR_APP_PRIVATE_KEY }}
-        run: |
-          python3 scripts/release_upload.py check \
-            --repo "${{ matrix.repo }}" --tag "${{ matrix.tag }}"
-
   # Stage A: the app's build, on a runner with no credentials.
   build:
     name: build ${{ matrix.token }} ${{ matrix.target }}

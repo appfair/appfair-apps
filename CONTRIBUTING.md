@@ -99,8 +99,17 @@ anything but the repository's contents.
 
 Each publishing run signs as the app and asks GitHub for a token limited to your repository
 alone, for one hour. Nothing long-lived is held anywhere on your side or ours. Assets it attaches
-are uploaded by `app-fair-publisher[bot]`, which is also how the queue recognizes its own and leaves
-everything else on the release alone.
+are uploaded by `app-fair-publisher[bot]`, which is also how the queue recognizes its own: an
+asset already on the release from anyone else is left alone and reported, never replaced.
+
+If your `Day-<flavor>.toml` sets `artifact`, give it a name of its own. A flavor that reuses the
+app's own artifact name produces packages the release already has, and the queue will refuse
+them rather than overwrite yours. Leaving `artifact` unset appends the flavor's name, which
+never collides.
+
+Installing it also matters for a staged release: the same access marks your pre-release as the
+latest release once the catalog has published it. Without the install, a pre-release stays one
+and `releases/latest` keeps answering with the version before it.
 
 Granting it is optional. Without it the app is still built, signed and published to the stores;
 the packages are left as the `release-assets-<token>-<tag>` artifact on the publish run, to

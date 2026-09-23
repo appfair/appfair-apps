@@ -66,13 +66,21 @@ class FlowTests(unittest.TestCase):
         names = [step.get("name") for step in steps]
         self.assertLess(names.index("Merge this pull request"), names.index("Record the publication"))
 
-    def test_nothing_but_the_signing_stage_holds_the_keys(self):
-        """Stage A runs the app's code, so the environment must not reach it."""
+    def test_only_the_jobs_that_need_keys_are_in_the_environment(self):
+        """Stage A runs the app's code, so the environment must not reach it. The signing job
+        holds the store keys, and the attach job the app's private key, which mints write tokens
+        on other people's repositories; no job outside the environment may read either."""
+        gated = {(name, job) for name, workflow in WORKFLOWS.items()
+                 for job, spec in workflow["jobs"].items() if "environment" in spec}
+        self.assertEqual(gated, {("submit", "publish"), ("submit", "attach")})
+
+    def test_the_app_key_is_read_only_inside_the_environment(self):
+        """A repository secret is readable by any workflow here, including one on a branch."""
         for name, workflow in WORKFLOWS.items():
             for job, spec in workflow["jobs"].items():
-                if job in ("publish",) and name == "submit":
-                    continue
-                self.assertNotIn("environment", spec, f"{name}:{job}")
+                uses_key = "APPFAIR_APP_PRIVATE_KEY" in yaml.safe_dump(spec)
+                if uses_key:
+                    self.assertEqual(spec.get("environment"), "store", f"{name}:{job}")
 
 
 class RecordTests(unittest.TestCase):

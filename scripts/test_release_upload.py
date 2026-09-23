@@ -113,22 +113,19 @@ class ReleaseUploadTests(unittest.TestCase):
 
     # --- what gets attached -------------------------------------------------------------
 
-    def test_only_the_flavored_packages_are_attached(self):
-        """The rail: an asset the catalog attaches carries the flavor, so it can never take the
-        name of one the maintainer published."""
+    def test_every_package_the_build_produced_is_attached(self):
+        """The directory holds this run's build and nothing else, so selection is by format. The
+        maintainer's assets are protected by the release, not by a naming convention."""
         self.packages(
             "games-fair-appfair-android-mdc.aab",
-            "games-fair-appfair-android-mdc.apk",
+            "fair-games-android-mdc.apk",
             "games-fair-appfair-android-mdc.aab.buildinfo.json",
-            "games-fair-android-mdc.aab",
             "pack-android-mdc.json",
         )
-        found, skipped = ru.attachable(self.dir, "appfair")
         self.assertEqual(
-            [p.name for p in found],
-            ["games-fair-appfair-android-mdc.aab", "games-fair-appfair-android-mdc.apk"],
+            [p.name for p in ru.attachable(self.dir)],
+            ["fair-games-android-mdc.apk", "games-fair-appfair-android-mdc.aab"],
         )
-        self.assertEqual(skipped, ["games-fair-android-mdc.aab (no -appfair- in its name)"])
 
     def test_a_signed_ipa_loses_the_unsigned_marker(self):
         self.assertEqual(
@@ -256,7 +253,7 @@ class ReleaseUploadTests(unittest.TestCase):
         self.packages(name)
         code, output = self.run_cli(
             "upload", "--repo", "Games-Fair/Games-Fair", "--tag", "v2.1.1",
-            "--dir", str(self.dir), "--flavor", "appfair",
+            "--dir", str(self.dir),
         )
         self.assertEqual(code, 0, output)
         self.assertIn(("DELETE", f"{ru.API}/repos/Games-Fair/Games-Fair/releases/assets/11"), fake.calls)
@@ -268,7 +265,7 @@ class ReleaseUploadTests(unittest.TestCase):
         self.packages("games-fair-appfair-android-mdc.aab", "games-fair-appfair-ios-uikit-unsigned.ipa")
         code, output = self.run_cli(
             "upload", "--repo", "Games-Fair/Games-Fair", "--tag", "v2.1.1",
-            "--dir", str(self.dir), "--flavor", "appfair",
+            "--dir", str(self.dir),
         )
         self.assertEqual(code, 0, output)
         posted = [
@@ -286,7 +283,7 @@ class ReleaseUploadTests(unittest.TestCase):
         fake = self.github(release=mine)
         self.packages(name)
         args = ["upload", "--repo", "Games-Fair/Games-Fair", "--tag", "v2.1.1",
-                "--dir", str(self.dir), "--flavor", "appfair"]
+                "--dir", str(self.dir)]
         code, output = self.run_cli(*args)
         self.assertEqual(code, 0, output)
         self.assertIn(("DELETE", f"{ru.API}/repos/Games-Fair/Games-Fair/releases/assets/11"), fake.calls)
@@ -306,7 +303,7 @@ class ReleaseUploadTests(unittest.TestCase):
         self.packages("games-fair-appfair-android-mdc.aab")
         code, output = self.run_cli(
             "upload", "--repo", "Games-Fair/Games-Fair", "--tag", "v2.1.1",
-            "--dir", str(self.dir), "--flavor", "appfair",
+            "--dir", str(self.dir),
         )
         self.assertEqual(code, 0)
         self.assertIn("1 signed package(s)", output)
@@ -321,7 +318,7 @@ class ReleaseUploadTests(unittest.TestCase):
         self.packages("games-fair-appfair-android-mdc.apk")
         code, output = self.run_cli(
             "upload", "--repo", "Games-Fair/Games-Fair", "--tag", "v2.1.1",
-            "--dir", str(self.dir), "--flavor", "appfair",
+            "--dir", str(self.dir),
         )
         self.assertEqual(code, 0, output)
         self.assertEqual(fake.patched, {"prerelease": False, "make_latest": "true"})
@@ -334,7 +331,7 @@ class ReleaseUploadTests(unittest.TestCase):
         self.packages("games-fair-appfair-android-mdc.apk")
         code, _ = self.run_cli(
             "upload", "--repo", "Games-Fair/Games-Fair", "--tag", "v2.1.1",
-            "--dir", str(self.dir), "--flavor", "appfair",
+            "--dir", str(self.dir),
         )
         self.assertEqual(code, 0)
         self.assertIsNone(fake.patched)
@@ -344,7 +341,7 @@ class ReleaseUploadTests(unittest.TestCase):
         self.packages("games-fair-appfair-android-mdc.apk")
         code, output = self.run_cli(
             "upload", "--repo", "Games-Fair/Games-Fair", "--tag", "v2.1.1", "--dir", str(self.dir),
-            "--flavor", "appfair", "--dry-run",
+            "--dry-run",
         )
         self.assertEqual(code, 0)
         self.assertIn("would mark v2.1.1 as the latest release", output)
@@ -363,40 +360,55 @@ class ReleaseUploadTests(unittest.TestCase):
             "games-fair-appfair-android-mdc.apk",
             "games-fair-appfair-ios-uikit-unsigned.ipa",
             "games-fair-appfair-android-mdc.apk.buildinfo.json",
-            "games-fair-android-mdc.apk",
         )
         out = self.dir / "staged"
-        code, output = self.run_cli("stage", "--dir", str(self.dir), "--out", str(out), "--flavor", "appfair")
+        code, output = self.run_cli("stage", "--dir", str(self.dir), "--out", str(out))
         self.assertEqual(code, 0, output)
+        # The packages, under the names they publish under; the provenance sidecar describes the
+        # unsigned build and is not one.
         self.assertEqual(
             sorted(p.name for p in out.iterdir()),
             ["games-fair-appfair-android-mdc.apk", "games-fair-appfair-ios-uikit.ipa"],
         )
 
-    def test_an_app_without_a_flavor_attaches_nothing(self):
-        """Its packages carry the maintainer's own names, and those are not the catalog's to
-        write."""
-        fake = self.github()
-        self.packages("games-fair-android-mdc.aab")
+    def test_a_name_the_app_already_published_is_refused_with_what_to_change(self):
+        """The rail that matters. An app whose flavor names its own artifact can produce the same
+        names as its own build; the catalog refuses those rather than replacing them."""
+        name = "games-fair-android-mdc.aab"
+        theirs = {"id": 7, "prerelease": False,
+                  "assets": [{"id": 11, "name": name, "uploader": {"login": "the-maintainer"}}]}
+        fake = self.with_app(release=theirs)
+        self.packages(name)
+        code, output = self.run_cli(
+            "upload", "--repo", "Games-Fair/Games-Fair", "--tag", "v2.1.1", "--dir", str(self.dir)
+        )
+        self.assertEqual(code, 0, output)
+        self.assertIn("uploaded by the-maintainer", output)
+        self.assertIn("`artifact` in Day-<flavor>.toml", output)
+        self.assertEqual([u for m, u in fake.calls if m == "POST" and "/releases/" in u], [])
+
+    def test_a_pre_release_is_promoted_even_when_nothing_could_be_attached(self):
+        """The catalog published this version; tying the promotion to the attachment would leave
+        a staged release pre-release for good, with releases/latest stuck behind it."""
+        name = "games-fair-android-mdc.aab"
+        theirs = {"id": 7, "prerelease": True,
+                  "assets": [{"id": 11, "name": name, "uploader": {"login": "the-maintainer"}}]}
+        fake = self.with_app(release=theirs)
+        self.packages(name)
+        code, output = self.run_cli(
+            "upload", "--repo", "Games-Fair/Games-Fair", "--tag", "v2.1.1", "--dir", str(self.dir)
+        )
+        self.assertEqual(code, 0, output)
+        self.assertEqual(fake.patched, {"prerelease": False, "make_latest": "true"})
+
+    def test_a_run_that_cannot_write_says_the_release_stays_a_pre_release(self):
+        self.with_app(installed=False)
+        self.packages("games-fair-appfair-android-mdc.aab")
         code, output = self.run_cli(
             "upload", "--repo", "Games-Fair/Games-Fair", "--tag", "v2.1.1", "--dir", str(self.dir)
         )
         self.assertEqual(code, 0)
-        self.assertIn("builds no flavor", output)
-        self.assertEqual(fake.calls, [])
-
-    def test_packages_built_without_the_flavor_are_left_alone(self):
-        """The catalog names a flavor for every app; carrying one is the app's choice, and the
-        matrix cannot know. What the build produced decides."""
-        fake = self.github()
-        self.packages("games-fair-android-mdc.aab")
-        code, output = self.run_cli(
-            "upload", "--repo", "Games-Fair/Games-Fair", "--tag", "v2.1.1",
-            "--dir", str(self.dir), "--flavor", "appfair",
-        )
-        self.assertEqual(code, 0)
-        self.assertIn("nothing in", output)
-        self.assertEqual(fake.calls, [])
+        self.assertIn("stays one", output)
 
     def test_the_policy_names_the_app_and_what_a_missing_install_does(self):
         """The workflows read this file rather than naming an app of their own."""
