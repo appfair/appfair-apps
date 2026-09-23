@@ -89,10 +89,12 @@ whose captures the listing uses say so with `store: N`, the position in the list
 - screenshot: puzzle-paused             # evidence for the walkthrough, not in the listing
 ```
 
-One mark covers every locale, theme and device the walkthrough runs on. The app's site publishes
-the captures with their positions in `gallery.json`, the review comment shows exactly those, the
-checks hold them to the stores' rules, and the signing stage places them in the fastlane tree for
-every locale the store knows. The catalog takes the light theme (`policy.yaml`,
+One mark covers every locale, theme and device the walkthrough runs on. The app's CI attaches
+the captures to the release as `screenshots.zip`, with their positions in `gallery.json` beside
+it; the review comment shows exactly those, the checks hold them to the stores' rules, and the
+signing stage unpacks the target's captures from the release and places them in the fastlane
+tree for every locale the store knows. Nothing is read from the app's website except, for the
+review, a link to its copy of each image. The catalog takes the light theme (`policy.yaml`,
 `screenshots.theme`).
 
 What the checks require, per channel the submission names:
@@ -279,16 +281,19 @@ eighth waits for an App Fair maintainer.
 4. **The app against the file**: the pinned commit's manifest, read through a sparse checkout that
    excludes the source. `day metadata --json` must report the version the tag names and the
    targets the file asks for, the tag must still point at the pinned commit, and the id it builds
-   has to match an `id` pin when the file states one. The app's website has to be published,
-   with its screenshot index at `<host>/main/gallery/gallery.json`, where `host` is the one in
-   the app's `website/site.toml`; the shared Day workflow publishes it with `deploy-web: true`.
+   has to match an `id` pin when the file states one. The release the tag names has to carry
+   `gallery.json`, the screenshot index the shared Day workflow attaches beside
+   `screenshots.zip`, and the listing's screenshots in it are checked against each store's
+   sizes (see below).
 5. **The reviewer's comment**: for an update, the range between the commit already published and
    the one this pull request proposes, with the number of commits and files, the build and
    packaging files inside it, and a link to read it on GitHub. A first submission gets a link to
-   the source at its commit. Below that, the app's iOS and Android screenshots from the site's
-   latest build (the `main/` channel, which a tag build fills with the tagged version), one
-   folded block per device, theme and language, linked rather than copied. When the whole set would not fit in one comment, other languages keep their block
-   and link to the gallery page instead. The comment is rewritten on every push.
+   the source at its commit. Below that, the listing's screenshots from the release's
+   `gallery.json`, one folded block per store, device and language, in listing order. Each image
+   links to the app's site where its latest build serves that same file (by sha-256); a capture
+   the site does not serve is named instead, since it lives in the release's `screenshots.zip`.
+   When the whole set would not fit in one comment, other languages keep their block and link
+   to the gallery page instead. The comment is rewritten on every push.
 6. **The build** (stage A): `day lint`, then `day pack --no-sign` for each target. This is the only
    stage that runs code from the app, and it holds no credentials, so a pull request cannot
    publish anything or reach a key.

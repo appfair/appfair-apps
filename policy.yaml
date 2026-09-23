@@ -106,8 +106,9 @@ review:
 
 # --- The listing's screenshots -----------------------------------------------------------------
 # A walkthrough marks the captures the listing uses with `store: N` on the screenshot step, and
-# the app's site publishes them in its gallery index. The review shows exactly those, and the
-# signing stage places them in the fastlane tree for every locale the store knows.
+# the app's CI attaches the index (gallery.json) and the captures (screenshots.zip) to the
+# release. The review shows exactly those, and the signing stage places them in the fastlane
+# tree for every locale the store knows.
 #
 # What each store accepts, per device kind the walkthrough captures on. Apple takes exact sizes
 # (developer.apple.com/help/app-store-connect/reference/screenshot-specifications); Google takes
@@ -207,5 +208,5 @@ app-data-paths:
   - store-*
   - resource/locales
   - resource-*/locales
-  # The site's host, which is where the listing's screenshots are read from.
+  # The site's host: the review links a capture to the site's copy of it when one is served.
   - website/site.toml

@@ -752,7 +752,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
         )
 
     # The review shows the reviewer the app's screenshots from the site the app publishes, and
-    # the stores show the same listing. Without the site there is nothing to review against.
+    # the stores show the same listing. Without the release's index there is nothing to review.
     if not getattr(args, "offline", False):
         if getattr(args, "gallery", None):
             try:
@@ -760,7 +760,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
             except (OSError, ValueError) as error:
                 index, why = None, f"{args.gallery} could not be read: {error}"
         else:
-            index, why = gallery_index(app, submitted)
+            index, why = gallery_index(app, tag)
         if index is None:
             bad(why)
         else:
@@ -879,9 +879,9 @@ def fetch_text(owner_repo: str, ref: str, path: str) -> str | None:
         return None
 
 
-# The development channel's index: what the last deploy built. After a tag build that is the
-# tagged version itself, where the release channel keeps showing the version before it until the
-# pre-release is marked Latest.
+# The site's development channel: what the last deploy built. After a tag build that is the
+# tagged version's captures, the same files the release carries, which is what lets the review
+# link an image rather than point into a zip.
 GALLERY_PATH = "main/gallery/gallery.json"
 # The comment has to stay under GitHub's limit for one comment (65,536 characters), with room
 # for the rest of the review. Past this, later locales fold to a link.
@@ -923,26 +923,61 @@ def site_host(owner_repo: str, commit: str) -> str:
     return str(host).rstrip("/") if host else ""
 
 
-def gallery_index(app: "App", commit: str) -> tuple[dict | None, str]:
-    """The screenshot index the app's website publishes, or why there is none.
+def release_asset_url(app: "App", tag: str, name: str) -> str:
+    return f"https://github.com/{app.owner_repo}/releases/download/{tag}/{name}"
 
-    The review shows the reviewer what the stores will show, from the site the app's own CI
-    publishes; the images are linked, never copied. A submission without a published site is
-    refused for that reason.
+
+def gallery_index(app: "App", tag: str) -> tuple[dict | None, str]:
+    """The screenshot index the app's release carries, or why there is none.
+
+    The captures that go to the stores are the tagged version's own: the app's CI ran its
+    walkthrough on the tag and attached `gallery.json` and `screenshots.zip` to the release, and
+    the signing stage takes them from there. Reading the release rather than the app's website
+    means a submission needs no site, and the set cannot drift from the version.
     """
-    why = (
-        "An App Fair submission needs the app's website published, since the review reads its "
-        "screenshot index. The shared Day workflow publishes it from website/site.toml with "
-        "`deploy-web: true` (https://daybrite.dev/docs/ci)."
-    )
-    host = site_host(app.owner_repo, commit)
-    if not host:
-        return None, f"{app.owner_repo} has no website/site.toml naming a host at {commit[:7]}. {why}"
-    url = f"{host}/{GALLERY_PATH}"
+    url = release_asset_url(app, tag, "gallery.json")
     status, body = fetch_json(url)
     if status != 200 or not isinstance(body, dict) or not isinstance(body.get("screenshots"), list):
-        return None, f"{url} could not be read ({status or 'no answer'}). {why}"
+        return None, (
+            f"{url} could not be read ({status or 'no answer'}). An App Fair submission takes the "
+            f"listing's screenshots from the release: the shared Day workflow attaches "
+            f"gallery.json and screenshots.zip to every release whose dayscripts captured "
+            f"screenshots (https://daybrite.dev/docs/ci)"
+        )
     return body, url
+
+
+def site_gallery(app: "App", commit: str) -> dict | None:
+    """The app's site's own index of its latest build, when the site is published.
+
+    Only the review comment reads it, to link an image the reviewer can open: a release's
+    captures live in its screenshots.zip, and the site's development channel serves the same
+    files after the tag build deploys it.
+    """
+    host = site_host(app.owner_repo, commit)
+    if not host:
+        return None
+    status, body = fetch_json(f"{host}/{GALLERY_PATH}")
+    if status != 200 or not isinstance(body, dict) or not isinstance(body.get("screenshots"), list):
+        return None
+    return body
+
+
+def viewable(index: dict, site: dict | None) -> dict:
+    """The index with each capture's `url` pointing at the site's copy of that very file, by
+    sha-256, and no `url` at all where the site has none or a different one."""
+    served = {
+        (str(e.get("path")), str(e.get("sha256"))): str(e.get("url"))
+        for e in (site or {}).get("screenshots") or []
+        if isinstance(e, dict) and e.get("url")
+    }
+    shots = []
+    for e in index.get("screenshots") or []:
+        if not isinstance(e, dict):
+            continue
+        url = served.get((str(e.get("path")), str(e.get("sha256"))))
+        shots.append({**e, "url": url} if url else {k: v for k, v in e.items() if k != "url"})
+    return {**index, "screenshots": shots}
 
 
 def store_screenshots(index: dict, theme: str) -> list[dict]:
@@ -951,7 +986,7 @@ def store_screenshots(index: dict, theme: str) -> list[dict]:
     in listing order."""
     chosen = []
     for shot in index.get("screenshots") or []:
-        if shot.get("os") not in ("ios", "android") or not shot.get("url"):
+        if shot.get("os") not in ("ios", "android"):
             continue
         position = shot.get("store")
         if not isinstance(position, int) or position < 1:
@@ -1042,7 +1077,7 @@ def screenshot_groups(index: dict) -> list[tuple[tuple[str, str, str, str], list
     order_locale = list(index.get("locales") or [])
     groups: dict[tuple[str, str, str, str], list[dict]] = {}
     for shot in index.get("screenshots") or []:
-        if shot.get("os") not in order_os or not shot.get("url"):
+        if shot.get("os") not in order_os:
             continue
         key = (str(shot["os"]), str(shot.get("device", "")), str(shot.get("theme", "")), str(shot.get("locale", "")))
         groups.setdefault(key, []).append(shot)
@@ -1089,8 +1124,11 @@ def screenshot_section(index: dict, url: str, budget: int = COMMENT_BUDGET) -> s
         )
 
     def inline(key, shots):
+        # A capture the site does not serve is named rather than shown: it is in the release's
+        # screenshots.zip, which is what the store receives.
         images = " ".join(
             f'<img src="{s["url"]}" width="120" alt="{s.get("title") or s.get("shot") or ""}">'
+            if s.get("url") else f"<code>{s.get('shot') or s.get('file') or ''}</code>"
             for s in shots
         )
         return f"<details><summary>{summary(key, len(shots))}</summary>\n\n<p>{images}</p>\n</details>"
@@ -1105,10 +1143,17 @@ def screenshot_section(index: dict, url: str, budget: int = COMMENT_BUDGET) -> s
         )
 
     generated = str(index.get("generated") or "")[:10]
+    unseen = sum(1 for s in listing if not s.get("url"))
     head = (
-        f"The listing's screenshots, from the site's [latest build]({url})"
+        f"The listing's screenshots, from the release's [gallery.json]({url})"
         + (f", generated {generated}" if generated else "")
-        + ", in listing order:"
+        + ", in listing order"
+        + (
+            f" ({unseen} of them named rather than shown: the site's latest build does not serve "
+            f"that file, so it is in the release's screenshots.zip)"
+            if unseen else ""
+        )
+        + ":"
     )
     blocks = [inline(key, shots) for key, shots in groups]
     # Fold until the section fits, least useful first: other languages before the site's
@@ -1493,8 +1538,11 @@ def cmd_review(args: argparse.Namespace) -> int:
             stats = compare_stats(app.owner_repo, was_commit, commit)
         section = review_section(app, previous, policy, stats, asked=not args.offline)
         if not args.offline:
-            index, url = gallery_index(app, commit)
-            section += "\n\n" + (screenshot_section(index, url) if index else url)
+            index, url = gallery_index(app, str(app.data.get("tag", "")))
+            if index:
+                section += "\n\n" + screenshot_section(viewable(index, site_gallery(app, commit)), url)
+            else:
+                section += "\n\n" + url
         sections.append(section)
 
     body = review_body(sections)
@@ -2664,22 +2712,46 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
         else:
             failures += 1
             print(f"FAIL an unmarked gallery passed: {found}")
-        # The review shows the listing alone, in listing order.
-        section = screenshot_section(listing_index, "https://example.test/App/main/gallery/gallery.json")
+        # The review shows the listing alone, in listing order, and names what it cannot show.
+        unseen_index = {**listing_index, "screenshots": [
+            ({k: v for k, v in s.items() if k != "url"} if s.get("locale") == "fr" else s)
+            for s in listing_index["screenshots"]]}
+        section = screenshot_section(unseen_index, "https://example.test/App/releases/download/v1/gallery.json")
         heads = [l[len("<details><summary>"):l.index("</summary>")] for l in section.splitlines() if l.startswith("<details><summary>")]
-        if heads[:2] == ["App Store listing (iPhone, English) · 1", "App Store listing (iPhone, French) · 1"] and "smoke.png" not in section and "/dark/" not in section:
+        if (heads[:2] == ["App Store listing (iPhone, English) · 1", "App Store listing (iPhone, French) · 1"]
+                and "smoke.png" not in section and "/dark/" not in section
+                and "release's [gallery.json](https://example.test/App/releases/download/v1/gallery.json)" in section
+                and "3 of them named rather than shown" in section and "<code>home</code>" in section):
             print("ok   the review shows the listing's screenshots and nothing else")
         else:
             failures += 1
-            print(f"FAIL the review's screenshot blocks were {heads}")
+            print(f"FAIL the review's screenshot blocks were {heads}: {section[:300]}")
 
-    # No published site: the message says what to publish and how.
-    missing, why = gallery_index(App(path=Path("apps/Nowhere.yaml"), data={"token": "Nowhere"}), "0" * 40)
-    if missing is None and "website/site.toml" in why and "deploy-web" in why:
-        print("ok   a submission without a published website is told what the review needs")
+    # A release without the index: the message says what attaches it.
+    nowhere = App(path=Path("apps/Nowhere.yaml"), data={"token": "Nowhere", "repo": "example/nowhere"})
+    missing, why = gallery_index(nowhere, "v0.0.0")
+    if missing is None and "releases/download/v0.0.0/gallery.json" in why and "screenshots.zip" in why:
+        print("ok   a release without gallery.json is told what the review needs")
     else:
         failures += 1
-        print(f"FAIL the missing-site message was: {why}")
+        print(f"FAIL the missing-index message was: {why}")
+
+    # The comment links a capture only where the site serves that very file.
+    release = {"screenshots": [
+        {"path": "gallery/ios-uikit/iphone/light/home.png", "sha256": "aa", "url": "https://example.test/App/gallery/x/home.png", "shot": "home"},
+        {"path": "gallery/ios-uikit/iphone/light/play.png", "sha256": "bb", "url": "https://example.test/App/gallery/x/play.png", "shot": "play"},
+        {"path": "gallery/ios-uikit/iphone/light/old.png", "sha256": "cc", "shot": "old"},
+    ]}
+    site = {"screenshots": [
+        {"path": "gallery/ios-uikit/iphone/light/home.png", "sha256": "aa", "url": "https://example.test/App/main/gallery/x/home.png"},
+        {"path": "gallery/ios-uikit/iphone/light/play.png", "sha256": "b2", "url": "https://example.test/App/main/gallery/x/play.png"},
+    ]}
+    seen = [s.get("url") for s in viewable(release, site)["screenshots"]]
+    if seen == ["https://example.test/App/main/gallery/x/home.png", None, None] and [s.get("url") for s in viewable(release, None)["screenshots"]] == [None, None, None]:
+        print("ok   the review links the site's copy of a capture only when it is the release's file")
+    else:
+        failures += 1
+        print(f"FAIL the viewable urls came out as {seen}")
 
     # The flavor follows this catalog's name, so a fork builds its own without editing anything.
     expected = ROOT.name.removesuffix("-apps")
@@ -2746,8 +2818,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--app", required=True, help="the app token")
     p.add_argument("--metadata", required=True, help="`day metadata --json` output")
     p.add_argument("--tag-commit", help="what the tag points at now, for the pin check")
-    p.add_argument("--offline", action="store_true", help="skip the published-site check")
-    p.add_argument("--gallery", help="a local gallery.json, in place of the published one")
+    p.add_argument("--offline", action="store_true", help="skip the release's screenshot check")
+    p.add_argument("--gallery", help="a local gallery.json, in place of the release's")
     p.set_defaults(func=cmd_verify)
 
     p = sub.add_parser("add", help="write a new submission from what an app has released")

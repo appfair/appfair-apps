@@ -344,16 +344,26 @@ runs:
       shell: bash
       env:
         FLAVOR_ARGS: ${{ steps.flavor.outputs.args }}
+        RELEASE: https://github.com/${{ inputs.repo }}/releases/download/${{ inputs.tag }}
+        TARGET: ${{ inputs.target }}
       run: |
         set -euo pipefail
         # `day store stage` generates the fastlane tree from the listing's text files, and
-        # places the listing's screenshots from the app's published gallery: the captures the
-        # walkthrough marked `store: N`, for every locale, read from the site's latest build.
-        # The site's host is the one website/site.toml names; verify already required it.
-        HOST=$(python3 -c 'import tomllib,sys; print(tomllib.load(open(sys.argv[1], "rb")).get("host", "").rstrip("/"))' app-data/website/site.toml)
-        [ -n "$HOST" ] || { echo "::error::app-data/website/site.toml names no host, so the listing's screenshots cannot be read"; exit 1; }
-        (cd app-data && "$DAY_BIN" $FLAVOR_ARGS store stage \
-           --screenshots "$HOST/main/gallery/gallery.json")
+        # places the listing's screenshots: the captures the walkthrough marked `store: N`, for
+        # every locale, from the release the tag names. The app's CI attached its merged index
+        # (gallery.json) and capture tree (screenshots.zip) to that release, so the set is the
+        # tagged version's own; verify already read the same index. Only this target's subtree
+        # is unpacked, since the zip carries every platform's captures.
+        mkdir -p release-shots
+        curl -fsSL --retry 3 -o release-shots/gallery.json "$RELEASE/gallery.json" \
+          || { echo "::error::$RELEASE/gallery.json could not be downloaded; the release carries no screenshot index"; exit 1; }
+        curl -fsSL --retry 3 -o "$RUNNER_TEMP/screenshots.zip" "$RELEASE/screenshots.zip" \
+          || { echo "::error::$RELEASE/screenshots.zip could not be downloaded; the release carries no captures"; exit 1; }
+        unzip -qo "$RUNNER_TEMP/screenshots.zip" "$TARGET/*" -d release-shots
+        rm -f "$RUNNER_TEMP/screenshots.zip"
+        echo "$(find release-shots -name '*.png' | wc -l) capture(s) from $RELEASE/screenshots.zip"
+        (cd app-data && "$DAY_BIN" $FLAVOR_ARGS store stage -p "$TARGET" \
+           --screenshots "$GITHUB_WORKSPACE/release-shots/gallery.json")
         echo "screenshots placed:"
         find app-data/build/day/store -type f \( -name '*.png' -o -name '*.jpg' \) | sed 's|app-data/build/day/store/||' | sort | head -40
         find app-data/build/day/store -maxdepth 3 -type d | head -20
