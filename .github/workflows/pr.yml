@@ -158,6 +158,10 @@ jobs:
       - uses: actions/checkout@v7
       - name: Check the release access
         env:
+          # The App Fair app signs for itself and mints a token for the app's repository alone;
+          # the personal access token is the fallback for a repository that granted the account
+          # instead. release_upload.py picks whichever it can use.
+          APPFAIR_APP_PRIVATE_KEY: ${{ secrets.APPFAIR_APP_PRIVATE_KEY }}
           APPFAIR_RELEASE_TOKEN: ${{ secrets.APPFAIR_RELEASE_TOKEN || secrets.APP_FAIR_BOT_TOKEN }}
         run: |
           python3 scripts/release_upload.py check \

@@ -22,16 +22,28 @@ ACCOUNT = "appfairbot"
 class Fake:
     """GitHub, as far as these tests are concerned."""
 
-    def __init__(self, login=ACCOUNT, push=True, release=None, repo_status=200):
+    def __init__(self, login=ACCOUNT, push=True, release=None, repo_status=200, installed=True):
         self.login = login
         self.push = push
         self.release = release if release is not None else {"id": 7, "assets": []}
         self.repo_status = repo_status
+        #: Whether the App Fair app is installed on the repository being asked about.
+        self.installed = installed
         self.calls: list[tuple[str, str]] = []
         self.patched: dict | None = None
+        #: The JWT the app signed its installation lookup with, for the signature test.
+        self.jwt = ""
 
     def __call__(self, method, url, token, data=None, content_type=""):
         self.calls.append((method, url))
+        if url.endswith("/installation"):
+            self.jwt = token
+            if not self.installed:
+                return 404, {"message": "Not Found"}
+            return 200, {"access_tokens_url": f"{ru.API}/app/installations/42/access_tokens"}
+        if url.endswith("/access_tokens"):
+            self.minted = json.loads(data.decode())
+            return 201, {"token": "ghs_installation_token"}
         if url.endswith("/user"):
             return 200, {"login": self.login}
         if "/releases/tags/" in url:
@@ -119,14 +131,14 @@ class ReleaseUploadTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("can write to Games-Fair/Games-Fair", output)
 
-    def test_an_app_that_granted_nothing_is_told_what_to_grant_and_passes(self):
+    def test_an_app_that_granted_nothing_is_told_what_to_install_and_passes(self):
         """The catalog publishes either way; only the release upload is lost."""
         self.github(push=False)
         code, output = self.run_cli("check", "--repo", "Games-Fair/Games-Fair", "--account", ACCOUNT)
         self.assertEqual(code, 0)
         self.assertIn("warning", output)
         self.assertIn("cannot write to Games-Fair/Games-Fair", output)
-        self.assertIn("Add people -> appfairbot -> Write", output)
+        self.assertIn("https://github.com/apps/app-fair", output)
         # A catalog that would rather stop says so in policy.yaml, or on the command line.
         code, _ = self.run_cli(
             "check", "--repo", "Games-Fair/Games-Fair", "--account", ACCOUNT, "--missing-access", "error"
@@ -164,6 +176,91 @@ class ReleaseUploadTests(unittest.TestCase):
         )
         self.assertEqual(code, 0)
         self.assertIn("no release for v9.9.9", output)
+
+    # --- the App Fair app ------------------------------------------------------------------
+
+    def app_key(self) -> str:
+        """A throwaway RSA key, so the JWT this signs is a real one."""
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        pem = key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        ).decode()
+        self.env("APPFAIR_APP_PRIVATE_KEY", pem)
+        self.public = key.public_key()
+        return pem
+
+    def with_app(self, **kwargs) -> Fake:
+        """policy.yaml names the app; this run holds its key."""
+        original = ru.policy
+        ru.policy = lambda: {**original(), "app-id": "1234567", "app": "app-fair"}
+        self.addCleanup(lambda: setattr(ru, "policy", original))
+        self.app_key()
+        return self.github(**kwargs)
+
+    def test_the_app_mints_a_token_for_that_repository_alone(self):
+        fake = self.with_app()
+        code, output = self.run_cli("check", "--repo", "Games-Fair/Games-Fair")
+        self.assertEqual(code, 0, output)
+        self.assertIn("installation on Games-Fair/Games-Fair", output)
+        # Narrowed on the way out: one repository, one permission.
+        self.assertEqual(
+            fake.minted, {"repositories": ["Games-Fair"], "permissions": {"contents": "write"}}
+        )
+        # The repository lookup used the minted token, not the JWT.
+        self.assertIn(("GET", f"{ru.API}/repos/Games-Fair/Games-Fair"), fake.calls)
+
+    def test_the_jwt_is_signed_with_the_app_key(self):
+        import base64
+
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import padding
+
+        fake = self.with_app()
+        self.run_cli("check", "--repo", "Games-Fair/Games-Fair")
+        head, claims, signature = fake.jwt.split(".")
+        pad = lambda s: s + "=" * (-len(s) % 4)  # noqa: E731
+        self.assertEqual(json.loads(base64.urlsafe_b64decode(pad(head)))["alg"], "RS256")
+        self.assertEqual(json.loads(base64.urlsafe_b64decode(pad(claims)))["iss"], "1234567")
+        self.public.verify(
+            base64.urlsafe_b64decode(pad(signature)),
+            f"{head}.{claims}".encode(),
+            padding.PKCS1v15(),
+            hashes.SHA256(),
+        )
+
+    def test_a_repository_without_the_app_falls_back_to_the_token(self):
+        """Until every app has installed it, the older account still carries the upload."""
+        fake = self.with_app(installed=False)
+        code, output = self.run_cli("check", "--repo", "Games-Fair/Games-Fair", "--account", ACCOUNT)
+        self.assertEqual(code, 0, output)
+        self.assertIn("APPFAIR_RELEASE_TOKEN", output)
+        self.assertIn(("GET", f"{ru.API}/user"), fake.calls)
+
+    def test_a_repository_with_neither_says_what_to_install(self):
+        self.env("APPFAIR_RELEASE_TOKEN", None)
+        self.with_app(installed=False)
+        code, output = self.run_cli("check", "--repo", "Games-Fair/Games-Fair")
+        self.assertEqual(code, 0)
+        self.assertIn("is not installed on Games-Fair/Games-Fair", output)
+        self.assertIn("https://github.com/apps/app-fair", output)
+
+    def test_the_app_replaces_its_own_assets(self):
+        """Uploaded as app-fair[bot], so that is the login the rail recognizes."""
+        name = "games-fair-appfair-android-mdc.aab"
+        mine = {"id": 7, "assets": [{"id": 11, "name": name, "uploader": {"login": "app-fair[bot]"}}]}
+        fake = self.with_app(release=mine)
+        self.packages(name)
+        code, output = self.run_cli(
+            "upload", "--repo", "Games-Fair/Games-Fair", "--tag", "v2.1.1",
+            "--dir", str(self.dir), "--flavor", "appfair",
+        )
+        self.assertEqual(code, 0, output)
+        self.assertIn(("DELETE", f"{ru.API}/repos/Games-Fair/Games-Fair/releases/assets/11"), fake.calls)
 
     # --- upload --------------------------------------------------------------------------
 

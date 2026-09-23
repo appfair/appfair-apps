@@ -136,8 +136,9 @@ build number above what the stores already have, a store listing, and an app tha
 [inclusion criteria](https://appfair.org/docs/inclusion-criteria/). The base release used for the
 comparison comes from the app's own CI, so its existing release workflow is enough and the App
 Fair's own packages never have to be published. The maintainer also grants the catalog's account
-write access to the repository, which is how the signed packages reach that release, and which
-is optional: without it they stay a run artifact (CONTRIBUTING.md, "Release access"). The queue derives the base artifact name from the
+the App Fair app install on their repository, which is how the signed packages reach that
+release, and which is optional: without it they stay a run artifact (CONTRIBUTING.md, "Release
+access"). The queue derives the base artifact name from the
 unflavored manifest at the pinned commit, including Day's unsigned-IPA suffix. The tag names the
 version being published, so `v2.0.2` publishes 2.0.2 on both stores; a flavor that states a
 `version` of its own is rejected unless the tag agrees with it.
@@ -270,6 +271,10 @@ These settings live in the repository rather than in a file:
 - **Actions policy.** The stages call composite actions from `daybrite/actions` for the toolchain
   and the day CLI. Under *Settings → Actions → General*, "Allow actions and reusable workflows"
   must admit `daybrite/*`.
+- **The App Fair GitHub App**, owned by this organization, with `Contents: Read and write` and
+  no webhook. Its numeric id goes in `policy.yaml` (`release-upload.app-id`) and its private key
+  in `APPFAIR_APP_PRIVATE_KEY`. Each app's maintainer installs it on their repository, and the
+  publishing run mints a one-hour token for that repository alone.
 - **A `store` environment with required reviewers.** The signing job names it, which keeps the
   store secrets off the repository and is where a submission is approved: the run waits until one
   of those reviewers releases it. Leave its deployment branches unrestricted, since the run that

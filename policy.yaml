@@ -116,6 +116,13 @@ review:
 # Once every package is on the release, a pre-release is marked as the latest one, so
 # `releases/latest/download/<name>` answers between a tag and its publication.
 release-upload:
+  # The App Fair GitHub App, which a maintainer installs on their repository. The queue signs its
+  # own requests with APPFAIR_APP_PRIVATE_KEY and this id, then mints a token for that repository
+  # alone, for one hour, with Contents: Read and write. `app-id` empty leaves the app unused.
+  app: app-fair
+  app-id: ""
+  # The older way in, for a repository that granted this account write access before the app
+  # existed. Used when the app is not installed there.
   account: appfairbot
   on-missing-access: warn
   promote-prerelease: true

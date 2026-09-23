@@ -91,10 +91,20 @@ games-fair-appfair-android-mdc.aab    the bundle Google Play received
 games-fair-appfair-ios-uikit.ipa      the archive App Store Connect received
 ```
 
-It takes write access to the app's repository, granted to the account `policy.yaml` names
-(`appfairbot`): **Settings → Collaborators and teams → Add people → appfairbot → Write**, or a
-team from the `appfair` organization with that role. The checks report on it in every pull
-request, so a missing grant is answered in the review.
+It takes write access to the app's repository, which you grant by installing the **App Fair**
+GitHub App on it: <https://github.com/apps/app-fair> → Install → this repository. It asks for
+`Contents: Read and write` and nothing else, it appears in your Settings → GitHub Apps with a
+Revoke button, and it is not a collaborator: it cannot open issues, review pull requests or touch
+anything but the repository's contents.
+
+Each publishing run signs as the app and asks GitHub for a token limited to your repository
+alone, for one hour. Nothing long-lived is held anywhere on your side or ours. Assets it attaches
+are uploaded by `app-fair[bot]`, which is also how the queue recognizes its own and leaves
+everything else on the release alone.
+
+A repository that granted the older `appfairbot` account write access keeps working: the queue
+uses the app where it is installed and that account where it is not. The checks report which one
+they found, in every pull request.
 
 Granting it is optional. Without it the app is still built, signed and published to the stores;
 the packages are left as the `release-assets-<token>-<tag>` artifact on the publish run, to
