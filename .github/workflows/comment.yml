@@ -1,6 +1,7 @@
-# Posts the review summary pr.yml produced. That workflow runs with a read-only token on a fork
-# pull request, so the comment is posted here instead, from the base branch. Nothing from the
-# pull request is checked out and none of its code runs.
+# Posts the review summary pr.yml produced, for a pull request from a fork: that run holds a
+# read-only token, so the comment is posted here instead, from the base branch, once the run has
+# completed. A pull request from this repository's own branches posts its own summary as it
+# runs. Nothing from the pull request is checked out and none of its code runs.
 name: review comment
 
 on:
@@ -15,9 +16,12 @@ permissions:
 jobs:
   comment:
     name: comment
-    if: github.event.workflow_run.event == 'pull_request'
+    if: >-
+      github.event.workflow_run.event == 'pull_request'
+      && github.event.workflow_run.head_repository.full_name != github.repository
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v7
       - name: Download the summary
         id: fetch
         continue-on-error: true
@@ -29,30 +33,13 @@ jobs:
           path: review
 
       # No artifact: the pull request changed no submission.
-      - name: Post or update the comment
+      - name: Read the pull request number
+        id: pr
         if: steps.fetch.outcome == 'success'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          PR=$(tr -dc '0-9' < review/review-pr.txt || true)
-          if [ -z "$PR" ]; then
-            echo "::error::the summary carries no pull request number"
-            exit 1
-          fi
-          if [ ! -s review/review.md ]; then
-            echo "::error::the summary is empty"
-            exit 1
-          fi
-          # One comment per pull request, found by the marker the summary starts with and
-          # rewritten on every push.
-          EXISTING=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
-            --jq '.[] | select(.body | startswith("<!-- appfair-review -->")) | .id' | head -1)
-          if [ -n "$EXISTING" ]; then
-            gh api -X PATCH "repos/$REPO/issues/comments/$EXISTING" -F body=@review/review.md > /dev/null
-            echo "rewrote comment $EXISTING on #$PR"
-          else
-            gh api -X POST "repos/$REPO/issues/$PR/comments" -F body=@review/review.md > /dev/null
-            echo "commented on #$PR"
-          fi
+        run: echo "number=$(tr -dc '0-9' < review/review-pr.txt)" >> "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/post-review
+        if: steps.fetch.outcome == 'success'
+        with:
+          pr: ${{ steps.pr.outputs.number }}
+          summary: review/review.md
+          token: ${{ github.token }}

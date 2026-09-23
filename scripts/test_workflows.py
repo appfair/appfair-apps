@@ -69,6 +69,20 @@ class FlowTests(unittest.TestCase):
         self.assertIn("gh pr merge", run)
         self.assertIn("queue.py record", run)
 
+    def test_the_review_comment_is_posted_before_the_run_waits_for_approval(self):
+        """The run pauses at the submission stage for a reviewer, and a comment posted only when
+        the run completes would arrive after the approval it exists to inform."""
+        plan = WORKFLOWS["pr"]["jobs"]["plan"]
+        self.assertEqual(plan["permissions"]["pull-requests"], "write")
+        names = [step.get("name") for step in plan["steps"]]
+        self.assertIn("Post the summary", names)
+        post = plan["steps"][names.index("Post the summary")]
+        self.assertEqual(post["uses"], "./.github/actions/post-review")
+        self.assertIn("head.repo.full_name == github.repository", " ".join(post["if"].split()))
+        # A fork's pull request still gets its comment after the run, from the base branch.
+        fork = WORKFLOWS["comment"]["jobs"]["comment"]
+        self.assertIn("head_repository.full_name != github.repository", " ".join(fork["if"].split()))
+
     def test_the_record_is_written_on_main(self):
         """The merge lands the submission; the record is a commit on top of it."""
         steps = WORKFLOWS["pr"]["jobs"]["merge"]["steps"]

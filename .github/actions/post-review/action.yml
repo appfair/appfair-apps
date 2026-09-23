@@ -1,0 +1,43 @@
+# Post the review summary on a pull request, or rewrite the one already there. One comment per
+# pull request, found by the marker the summary starts with.
+name: Post the review summary
+description: >-
+  Post the reviewer's summary as a comment on the pull request, replacing the earlier one.
+
+inputs:
+  pr:
+    description: The pull request number.
+    required: true
+  summary:
+    description: The Markdown file holding the summary.
+    required: false
+    default: review.md
+  token:
+    description: A token that can write pull-request comments.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Post or update the comment
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        REPO: ${{ github.repository }}
+        PR: ${{ inputs.pr }}
+        SUMMARY: ${{ inputs.summary }}
+      run: |
+        set -euo pipefail
+        case "$PR" in
+          ''|*[!0-9]*) echo "::error::the summary carries no pull request number"; exit 1 ;;
+        esac
+        [ -s "$SUMMARY" ] || { echo "::error::$SUMMARY is empty"; exit 1; }
+        EXISTING=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
+          --jq '.[] | select(.body | startswith("<!-- appfair-review -->")) | .id' | head -1)
+        if [ -n "$EXISTING" ]; then
+          gh api -X PATCH "repos/$REPO/issues/comments/$EXISTING" -F body=@"$SUMMARY" > /dev/null
+          echo "rewrote comment $EXISTING on #$PR"
+        else
+          gh api -X POST "repos/$REPO/issues/$PR/comments" -F body=@"$SUMMARY" > /dev/null
+          echo "commented on #$PR"
+        fi

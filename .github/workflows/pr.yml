@@ -40,6 +40,11 @@ jobs:
   plan:
     name: plan
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # For the review comment. A pull request from this repository's own branches, which is
+      # every submission, carries a token that can write it; comment.yml covers a fork's.
+      pull-requests: write
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
       build-matrix: ${{ steps.plan.outputs.build-matrix }}
@@ -91,6 +96,18 @@ jobs:
           python3 scripts/queue.py review --changed-from "origin/${{ github.base_ref }}" \
             --out review.md
           echo "${{ github.event.pull_request.number }}" > review-pr.txt
+      # Posted from here rather than after the run: the run waits for a reviewer at the
+      # submission stage, and the reviewer needs this comment before approving, not after.
+      - name: Post the summary
+        if: >-
+          steps.plan.outputs.count != '0'
+          && github.event.pull_request.head.repo.full_name == github.repository
+        uses: ./.github/actions/post-review
+        with:
+          pr: ${{ github.event.pull_request.number }}
+          token: ${{ github.token }}
+      # For a fork's pull request, whose token cannot comment: comment.yml posts it from the base
+      # branch once this run completes.
       - name: Upload the summary
         if: steps.plan.outputs.count != '0'
         uses: actions/upload-artifact@v7
