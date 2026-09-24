@@ -37,9 +37,10 @@ inputs:
     description: >-
       The listing's capture tree, with gallery.json at its root: what `queue.py listing` cut
       out of the release's screenshots.zip and the verify stage kept as this run's
-      `listing-<token>` artifact. The same files the reviewer was shown go to the store.
+      `listing-<token>` artifact. The same files the reviewer was shown go to the store. Empty
+      stages the listing without screenshots, and each store keeps what it shows today.
     required: false
-    default: listing
+    default: ""
   day-version:
     description: Which day CLI signs and stages.
     required: false
@@ -360,10 +361,15 @@ runs:
         # every locale, from the tree the verify stage cut out of the release's screenshots.zip
         # and kept as this run's artifact. Nothing is fetched here, so what the reviewer saw is
         # what the store receives; the CLI holds the set to the store's rules once more.
-        [ -f "$LISTING/gallery.json" ] || { echo "::error::$LISTING/gallery.json is missing; the listing-${{ inputs.token }} artifact the verify stage uploads was not downloaded"; exit 1; }
-        echo "$(find "$LISTING" -name '*.png' | wc -l) capture(s) in $LISTING"
-        (cd app-data && "$DAY_BIN" $FLAVOR_ARGS store stage -p "$TARGET" \
-           --screenshots "$GITHUB_WORKSPACE/$LISTING/gallery.json")
+        if [ -z "$LISTING" ]; then
+          echo "the stores' screenshots are left alone (no listing tree named)"
+          (cd app-data && "$DAY_BIN" $FLAVOR_ARGS store stage -p "$TARGET")
+        else
+          [ -f "$LISTING/gallery.json" ] || { echo "::error::$LISTING/gallery.json is missing; the listing-${{ inputs.token }} artifact the verify stage uploads was not downloaded"; exit 1; }
+          echo "$(find "$LISTING" -name '*.png' | wc -l) capture(s) in $LISTING"
+          (cd app-data && "$DAY_BIN" $FLAVOR_ARGS store stage -p "$TARGET" \
+             --screenshots "$GITHUB_WORKSPACE/$LISTING/gallery.json")
+        fi
         echo "screenshots placed:"
         find app-data/build/day/store -type f \( -name '*.png' -o -name '*.jpg' \) | sed 's|app-data/build/day/store/||' | sort | head -40
         find app-data/build/day/store -maxdepth 3 -type d | head -20

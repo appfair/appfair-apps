@@ -44,14 +44,17 @@ jobs:
           path: packages
       # The listing's captures, cut out of the release's screenshots.zip by the verify stage:
       # the same files the review comment showed, so nothing is fetched again here.
-      - uses: actions/download-artifact@v8
+      - if: ${{ matrix.screenshots }}
+        uses: actions/download-artifact@v8
         with:
           name: listing-${{ matrix.token }}
           path: listing
       - uses: ./.github/actions/sign-submit
         with:
           token: ${{ matrix.token }}
-          screenshots: listing
+          # Empty leaves the stores' screenshots alone (`screenshots: false` in the submission,
+          # or a manual publish that asked for it).
+          screenshots: ${{ matrix.screenshots && 'listing' || '' }}
           repo: ${{ matrix.repo }}
           ref: ${{ matrix.commit }}
           target: ${{ matrix.target }}

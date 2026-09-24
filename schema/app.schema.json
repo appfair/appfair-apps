@@ -67,6 +67,11 @@
       "maxLength": 200,
       "description": "One line about the app for people reading the catalog. The stores show the listing from the app's own repository."
     },
+    "screenshots": {
+      "type": "boolean",
+      "default": true,
+      "description": "Whether the submission replaces the stores' screenshots with the walkthrough's marked captures (the release's gallery.json and screenshots.zip). false leaves what each store already shows: the checks skip the marks, the review shows none, and the signing stage stages the listing without them."
+    },
     "distribution": {
       "type": "object",
       "description": "Where this app is published, keyed by the target that builds for it. Each target is built once and each channel under it gets a submission. policy.yaml declares the channels; apple-app-store and google-play-store work today.",

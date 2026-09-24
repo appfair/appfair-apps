@@ -105,19 +105,22 @@ review:
 # secret holding it in its `apple-app-store: profile-secret`.
 
 # --- The listing's screenshots -----------------------------------------------------------------
-# A walkthrough marks the captures the listing uses with `store: N` on the screenshot step, and
-# the app's CI attaches the index (gallery.json) and the captures (screenshots.zip) to the
-# release. The review shows exactly those, and the signing stage places them in the fastlane
-# tree for every locale the store knows.
+# An app declares which captures each store's listing shows in its store/app.toml
+# `[storefront.<target>.<store>.screenshots]` (per device kind, or `default`), naming its walkthrough's
+# `screenshot:` steps and the theme to take; `day screenshot index` resolves that into the
+# index's `listings`, and the app's CI attaches the index (gallery.json) and the captures
+# (screenshots.zip) to the release. The review shows exactly those, and the signing stage
+# places them in the fastlane tree for every locale the store knows.
 #
-# What each store accepts, per device kind the walkthrough captures on. Apple takes exact sizes
-# (developer.apple.com/help/app-store-connect/reference/screenshot-specifications); Google takes
-# a range, with the long side at most twice the short one (support.google.com/googleplay/
-# android-developer/answer/9866151). `required` device kinds need at least one screenshot in
-# every locale of the listing; `max` is the store's ceiling per kind.
+# What each store accepts, per device kind the walkthrough captures on: the fallback for a release
+# without a `storefront.json` (`day store export` carries the rules the app's CLI held the listing
+# to, and the queue reads those first). Apple takes exact sizes
+# (developer.apple.com/help/app-store-connect/reference/screenshot-specifications). Google's
+# numbers are what its publishing API enforces, "min size: [1080], max size: [7680], max aspect
+# ratio: [2.3]" (the refusal it sent for a 1280x800 tablet capture, 2026-09-24), which is not
+# what its help page states (320 px, 2:1). `required` device kinds need at least one screenshot
+# in every locale of the listing; `max` is the store's ceiling per kind.
 screenshots:
-  # Of a walkthrough that captures both themes, the listing takes this one.
-  theme: light
   apple-app-store:
     iphone:
       required: true
@@ -131,15 +134,15 @@ screenshots:
     phone:
       required: true
       max: 8
-      min-side: 320
-      max-side: 3840
-      max-ratio: 2.0
+      min-side: 1080
+      max-side: 7680
+      max-ratio: 2.3
     tablet:
       required: false
       max: 8
-      min-side: 320
-      max-side: 3840
-      max-ratio: 2.0
+      min-side: 1080
+      max-side: 7680
+      max-ratio: 2.3
 
 # --- The maintainer's release ----------------------------------------------------------------
 # The packages this queue signs are attached to the release the submission names, beside the ones

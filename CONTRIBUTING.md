@@ -80,16 +80,22 @@ An app built with the shared Day workflow already publishes the base packages.
 
 ## The listing's screenshots
 
-A walkthrough captures far more screens than a store listing shows. The `screenshot:` steps
-whose captures the listing uses say so with `store: N`, the position in the listing:
+A walkthrough captures far more screens than a store listing shows. Which captures each
+listing shows is declared in the app's `store/storefront.toml` (or `storefront.yaml`, the same tree in YAML),
+apart from the walkthrough, naming its
+`screenshot:` steps per store and device kind (the
+[store listings](https://daybrite.dev/docs/store#screenshots) doc has the whole shape):
 
-```yaml
-- screenshot: { name: home, title: Home, store: 1 }
-- screenshot: { name: puzzle, title: Puzzle, store: 2 }
-- screenshot: puzzle-paused             # evidence for the walkthrough, not in the listing
+```toml
+[storefront.ios-uikit.apple-app-store.screenshots]
+iphone = ["home", "puzzle"]
+ipad = ["home", { name = "puzzle", theme = "dark" }]
+
+[storefront.android-mdc.google-play-store.screenshots]
+default = ["home", "puzzle"]            # every device kind: phone and tablet alike
 ```
 
-One mark covers every locale, theme and device the walkthrough runs on. The app's CI attaches
+Each list applies to every locale the walkthrough captured. The app's CI attaches
 the captures to the release as `screenshots.zip`, with their positions in `gallery.json` beside
 it. The verify stage fetches both once, holds the marked captures to the stores' rules, cuts
 them out of the zip (`queue.py listing`, each file checked against the index's sha-256) and
@@ -104,13 +110,18 @@ What the checks require, per channel the submission names:
 | store | device | what it takes |
 |---|---|---|
 | App Store | iPhone, iPad | one of Apple's exact sizes per device; the CI profiles `iPhone * Pro Max` and `iPad Pro 13-inch` produce them (1320×2868, 2752×2064) |
-| Google Play | phone | 320 to 3840 px a side, the long side at most twice the short: a 9:16 profile such as `pixel`, since the default `medium_phone` is 20:9 and is refused |
-| Google Play | tablet | the same range; optional |
+| Google Play | phone | 1080 to 7680 px a side, the long side at most 2.3× the short, as Play's API enforces (its help page says 320 px and 2:1); any 1080-wide phone profile clears it |
+| Google Play | tablet | the same range; optional. The shared workflow's default `medium_tablet` is captured halved (1280×800) and refused; `Nexus 7 2013` with `density=240` captures 1920×1200 |
 
 Every locale the gallery carries needs at least one screenshot on each required device, or
 App Store Connect refuses the version for that language, and no more than the store's ceiling
 (10 for Apple, 8 for Google). A failure names the screenshot, its size, and the profile to
 capture on.
+
+A submission can leave the stores' screenshots alone: `screenshots: false` in its file skips
+the marks check, the review says so instead of showing captures, and the signing stage stages
+the listing without them. The `publish` workflow's `screenshots` input does the same for one
+manual run.
 
 ## Release access
 

@@ -36,6 +36,13 @@ on:
         required: false
         type: boolean
         default: false
+      screenshots:
+        description: >-
+          Replace the stores' screenshots with the release's marked captures, as a merge does.
+          Off leaves what each store shows today, whatever the submission file says.
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -61,7 +68,8 @@ jobs:
           set -euo pipefail
           python3 scripts/queue.py plan --app "${{ inputs.app }}" \
             ${{ inputs.channel && format('--channel {0}', inputs.channel) || '' }} \
-            ${{ inputs.lane && format('--lane "{0}"', inputs.lane) || '' }}
+            ${{ inputs.lane && format('--lane "{0}"', inputs.lane) || '' }} \
+            ${{ !inputs.screenshots && '--no-screenshots' || '' }}
 
   # The pull request's checks, repeated against what is now on `main`.
   verify:
@@ -122,6 +130,7 @@ jobs:
       # as this run's artifact, and the review and the store submission both take that artifact,
       # so the reviewer approves the files the store receives.
       - name: Fetch the release's screenshots
+        if: ${{ matrix.screenshots }}
         env:
           RELEASE: https://github.com/${{ matrix.repo }}/releases/download/${{ matrix.tag }}
         run: |
@@ -133,9 +142,17 @@ jobs:
             || { echo "::error file=apps/${{ matrix.token }}.yaml::$RELEASE/screenshots.zip could not be downloaded; the release carries its index and not its captures"; exit 1; }
       - name: Verify the submission
         run: |
-          python3 scripts/queue.py verify --app "${{ matrix.token }}" --metadata metadata.json \
-            --tag-commit "${TAG_COMMIT:-}" --gallery release-shots/gallery.json
+          set -euo pipefail
+          # With `screenshots: false` the release's index is not fetched, and verify skips it.
+          if [ "${{ matrix.screenshots }}" = true ]; then
+            python3 scripts/queue.py verify --app "${{ matrix.token }}" --metadata metadata.json \
+              --tag-commit "${TAG_COMMIT:-}" --gallery release-shots/gallery.json
+          else
+            python3 scripts/queue.py verify --app "${{ matrix.token }}" --metadata metadata.json \
+              --tag-commit "${TAG_COMMIT:-}"
+          fi
       - name: Cut the listing out of the release
+        if: ${{ matrix.screenshots }}
         run: |
           set -euo pipefail
           python3 scripts/queue.py listing --gallery release-shots/gallery.json \
@@ -143,6 +160,7 @@ jobs:
           "$DAY_BIN" --project app-data ${{ matrix.flavor != '' && format('--flavor {0}', matrix.flavor) || '' }} \
             store screenshots "$PWD/listing/gallery.json"
       - name: Keep the listing for the review and the submission
+        if: ${{ matrix.screenshots }}
         uses: actions/upload-artifact@v7
         with:
           name: listing-${{ matrix.token }}

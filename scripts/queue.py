@@ -40,7 +40,7 @@ STATE = ROOT / "state" / "published.json"
 
 # The keys a submission may carry; anything else is rejected as a typo. A channel's settings live
 # under its name, and policy.yaml lists the channels and the settings each one takes.
-TOP_LEVEL = {"token", "title", "tag", "commit", "distribution", "summary", "id", "android-id"}
+TOP_LEVEL = {"token", "title", "tag", "commit", "distribution", "summary", "id", "android-id", "screenshots"}
 
 # What each store accepts as an id. Apple takes letters, digits, hyphens and periods; Play takes a
 # Java package name, which rules the hyphen out and wants every segment to start with a letter.
@@ -273,6 +273,9 @@ def validate_app(app: App, policy: Policy, others: list[App] | None = None) -> l
     if unknown:
         bad(f"unknown key(s): {', '.join(sorted(unknown))}")
 
+    if "screenshots" in data and not isinstance(data.get("screenshots"), bool):
+        bad("screenshots takes true or false: whether the submission replaces the stores' screenshots")
+
     token = data.get("token")
     if not isinstance(token, str) or not token:
         bad("token is required: the app's GitHub organization and repository name")
@@ -502,6 +505,14 @@ def runner_for(target: str, policy: Policy) -> str:
     return "macos-15" if target.startswith("ios") else "ubuntu-latest"
 
 
+# `plan --no-screenshots` sets this: a manual publish that leaves the stores' screenshots alone.
+NO_SCREENSHOTS: dict[str, bool] = {}
+
+
+def submits_screenshots(app: App) -> bool:
+    return bool(app.data.get("screenshots", True))
+
+
 def matrix_entry(app: App, policy: Policy) -> dict:
     """One row per app, holding what every stage needs from the submission."""
     pairs = app_channels(app, policy)
@@ -518,6 +529,9 @@ def matrix_entry(app: App, policy: Policy) -> dict:
         "targets": ",".join(sorted({target for target, _ in pairs})),
         "channels": ",".join(channel.name for _, channel in pairs),
         "day_version": policy.day_version,
+        # Whether the stores' screenshots are replaced: the file's `screenshots`, true unless it
+        # says otherwise, and `plan --no-screenshots` for one run.
+        "screenshots": bool(app.data.get("screenshots", True)) and not NO_SCREENSHOTS.get("set", False),
     }
 
 
@@ -559,6 +573,7 @@ def publish_rows(app: App, entry: dict, policy: Policy) -> list[dict]:
 
 def cmd_plan(args: argparse.Namespace) -> int:
     policy = Policy.load()
+    NO_SCREENSHOTS["set"] = bool(getattr(args, "no_screenshots", False))
     if args.app:
         paths = [p for p in (APPS / f"{args.app}.yaml", APPS / f"{args.app}.yml") if p.exists()]
         if not paths:
@@ -753,7 +768,9 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
     # The review shows the reviewer the app's screenshots from the site the app publishes, and
     # the stores show the same listing. Without the release's index there is nothing to review.
-    if not getattr(args, "offline", False):
+    # A submission with `screenshots: false` leaves the stores' screenshots alone, so none of
+    # this applies to it.
+    if not getattr(args, "offline", False) and submits_screenshots(app):
         if getattr(args, "gallery", None):
             try:
                 index, why = json.loads(Path(args.gallery).read_text()), args.gallery
@@ -764,7 +781,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
         if index is None:
             bad(why)
         else:
-            problems.extend(screenshot_problems(app, index, load_yaml(ROOT / "policy.yaml"), rel))
+            problems.extend(screenshot_problems(app, index, store_rules(app, tag), rel))
 
     for problem in problems:
         problem.emit()
@@ -927,6 +944,33 @@ def release_asset_url(app: "App", tag: str, name: str) -> str:
     return f"https://github.com/{app.owner_repo}/releases/download/{tag}/{name}"
 
 
+def store_rules(app: "App", tag: str) -> dict:
+    """The stores' screenshot rules to hold the release's captures to, in policy.yaml's shape.
+
+    The release's own `storefront.json` (what `day store export` wrote, with the rules the
+    app's CLI held the listing to) first, so the queue and the app agree; policy.yaml's copy
+    for a release that predates the document.
+    """
+    import urllib.error
+    import urllib.request
+
+    url = release_asset_url(app, tag, "storefront.json")
+    try:
+        with urllib.request.urlopen(url, timeout=20) as response:  # noqa: S310
+            doc = json.loads(response.read().decode())
+    except (urllib.error.HTTPError, OSError, ValueError):
+        return load_yaml(ROOT / "policy.yaml")
+    rules = doc.get("rules") if isinstance(doc, dict) else None
+    if not isinstance(rules, dict):
+        return load_yaml(ROOT / "policy.yaml")
+    screenshots = {
+        store: rule.get("screenshots") or {}
+        for store, rule in rules.items()
+        if isinstance(rule, dict) and rule.get("layout")
+    }
+    return {"screenshots": screenshots}
+
+
 def gallery_index(app: "App", tag: str) -> tuple[dict | None, str]:
     """The screenshot index the app's release carries, or why there is none.
 
@@ -980,48 +1024,82 @@ def viewable(index: dict, site: dict | None) -> dict:
     return {**index, "screenshots": shots}
 
 
-def store_screenshots(index: dict, theme: str) -> list[dict]:
-    """The captures the listing takes: the ones a `screenshot:` step marked with `store: N`, in
-    the theme the catalog names (a capture with no theme is taken as it is), on iOS and Android,
-    in listing order."""
-    chosen = []
-    for shot in index.get("screenshots") or []:
-        if shot.get("os") not in ("ios", "android"):
-            continue
-        position = shot.get("store")
-        if not isinstance(position, int) or position < 1:
-            continue
-        if shot.get("theme") not in (None, theme):
-            continue
-        chosen.append(shot)
-    return sorted(chosen, key=lambda s: (s["os"], str(s.get("device", "")), str(s.get("locale", "")), s["store"]))
+STORE_LABELS = {"apple-app-store": "App Store", "google-play-store": "Google Play"}
+CHANNEL_TARGETS = {"apple-app-store": "ios-uikit", "google-play-store": "android-mdc"}
+
+
+def capture_kind(target: str, device: object) -> str:
+    """The device kind a capture belongs to: its slug, or what a profile-less capture on the
+    platform is (`iphone`, `phone`), the way the day CLI reads it."""
+    if device:
+        return str(device)
+    return {"ios-uikit": "iphone", "android-mdc": "phone"}.get(target, "default")
+
+
+def listing_captures(index: dict, target: str, store: str) -> list[dict]:
+    """The captures `store`'s listing shows for `target`, from the index's `listings` (what
+    `day screenshot index` resolved from the app's store/storefront.toml [storefront]): per device
+    kind and locale, the declared shots in order, in the declared theme (a capture with no
+    theme is taken). Each carries `position`, `kind` and `store`."""
+    kinds = (((index.get("listings") or {}).get(target) or {}).get("stores") or {}).get(store) or {}
+    out = []
+    for kind, by_locale in kinds.items():
+        for locale, wanted in (by_locale or {}).items():
+            for i, want in enumerate(wanted or []):
+                if not isinstance(want, dict):
+                    continue
+                for e in index.get("screenshots") or []:
+                    if e.get("platform") != target or e.get("shot") != want.get("shot"):
+                        continue
+                    if capture_kind(target, e.get("device")) != kind or e.get("locale") != locale:
+                        continue
+                    if e.get("theme") not in (None, want.get("theme") or "light"):
+                        continue
+                    out.append({**e, "position": i + 1, "kind": kind, "store": store})
+    return sorted(out, key=lambda s: (s["store"], s["kind"], str(s.get("locale")), s["position"]))
+
+
+def listing_pairs(index: dict, channels: list[str]) -> list[tuple[str, str]]:
+    """Every (target, store) the index declares among the catalog's channels, App Store first."""
+    listings = index.get("listings") or {}
+    pairs = []
+    for channel in channels:
+        target = CHANNEL_TARGETS.get(channel)
+        if target and channel in ((listings.get(target) or {}).get("stores") or {}):
+            pairs.append((target, channel))
+    return pairs
 
 
 def screenshot_problems(app: "App", index: dict, policy_raw: dict, path: str) -> list["Problem"]:
     """What the stores would refuse about the listing's screenshots, read from the index alone.
 
     Sizes come from the index (`width`/`height`), so nothing is downloaded. Apple takes exact
-    sizes per device kind; Google a range with the long side at most twice the short. A kind the
+    sizes per device kind; Google a range, with the limits its API enforces. A kind the
     policy marks `required` needs at least one screenshot in every locale the listing carries,
     which is the refusal App Store Connect gives at submission time otherwise.
     """
     rules_by_channel = policy_raw.get("screenshots") or {}
-    theme = str(rules_by_channel.get("theme") or "light")
-    chosen = store_screenshots(index, theme)
     problems: list[Problem] = []
     index_locales = [str(l) for l in index.get("locales") or []]
     for target, channels in (app.data.get("distribution") or {}).items():
-        os_ = {"ios-uikit": "ios", "android-mdc": "android"}.get(target)
-        if not os_:
+        if target not in CHANNEL_TARGETS.values():
             continue
         for channel in channels or []:
             rules = rules_by_channel.get(channel)
             if not isinstance(rules, dict):
                 continue
+            chosen = listing_captures(index, target, channel)
+            for shot in chosen:
+                if not any(isinstance(rules.get(k), dict) and (shot["kind"] == k or (k == "tablet" and shot["kind"].startswith("tablet"))) for k in rules):
+                    problems.append(Problem(path, (
+                        f"{channel}: the screenshot {shot.get('shot')!r} ({shot.get('locale')}) was captured on device "
+                        f"{shot['kind']!r}, which is not a kind the store lists ({', '.join(rules)}); the CI device "
+                        f"profile's `slug=` names it"
+                    )))
             for kind, rule in rules.items():
                 if not isinstance(rule, dict):
                     continue
-                mine = [s for s in chosen if s["os"] == os_ and str(s.get("device", "")) == kind]
+                mine = [s for s in chosen if s["kind"] == kind or (kind == "tablet" and s["kind"].startswith("tablet"))]
                 # Each screenshot's size, against what the store takes for that kind.
                 for shot in mine:
                     w, h = shot.get("width") or 0, shot.get("height") or 0
@@ -1036,7 +1114,12 @@ def screenshot_problems(app: "App", index: dict, policy_raw: dict, path: str) ->
                         continue
                     lo, hi = min(w, h), max(w, h)
                     if rule.get("min-side") and lo < int(rule["min-side"]):
-                        problems.append(Problem(path, f"{channel}: the {kind} screenshot {shot.get('shot')!r} ({shot.get('locale')}) is {w}×{h}; the short side has to be at least {rule['min-side']} px"))
+                        problems.append(Problem(path, (
+                            f"{channel}: the {kind} screenshot {shot.get('shot')!r} ({shot.get('locale')}) is {w}×{h}; "
+                            f"the short side has to be at least {rule['min-side']} px. A CI tablet past three million "
+                            f"pixels is captured halved (`medium_tablet` at 1280×800); `Nexus 7 2013` with `density=240` "
+                            f"captures 1920×1200"
+                        )))
                     if rule.get("max-side") and hi > int(rule["max-side"]):
                         problems.append(Problem(path, f"{channel}: the {kind} screenshot {shot.get('shot')!r} ({shot.get('locale')}) is {w}×{h}; the long side has to be at most {rule['max-side']} px"))
                     ratio = float(rule.get("max-ratio") or 0)
@@ -1044,8 +1127,7 @@ def screenshot_problems(app: "App", index: dict, policy_raw: dict, path: str) ->
                         problems.append(Problem(path, (
                             f"{channel}: the {kind} screenshot {shot.get('shot')!r} ({shot.get('locale')}) is {w}×{h}, "
                             f"{hi / lo:.2f}:1; Google Play takes at most {ratio:g}:1 (the long side no more than "
-                            f"{ratio:g}× the short). Capture on a {kind} profile with a shorter screen, such as a "
-                            f"9:16 one"
+                            f"{ratio:g}× the short). Capture on a {kind} profile with a shorter screen"
                         )))
                 # Coverage: every locale, and not more than the store's ceiling.
                 per_locale: dict[str, int] = {}
@@ -1059,8 +1141,10 @@ def screenshot_problems(app: "App", index: dict, policy_raw: dict, path: str) ->
                     missing = [l for l in index_locales if l not in per_locale]
                     if not mine:
                         problems.append(Problem(path, (
-                            f"{channel} needs {kind} screenshots and the gallery marks none. Add `store: N` to the "
-                            f"`screenshot:` steps the listing should show, and capture on a {kind} profile"
+                            f"{channel} needs {kind} screenshots and the listing declares none for it, or the "
+                            f"walkthrough captured none on a {kind} profile. Declare them in store/storefront.toml, "
+                            f"`[storefront.{target}.{channel}.screenshots]` with a `{kind}` or `default` list, "
+                            f"and capture on a {kind} profile"
                         )))
                     elif missing:
                         problems.append(Problem(path, f"{channel}: no {kind} screenshots for {', '.join(missing)}; the walkthrough captured other locales, so run it for these too"))
@@ -1078,8 +1162,14 @@ def cmd_listing(args: argparse.Namespace) -> int:
     import zipfile
 
     index = json.loads(Path(args.gallery).read_text())
-    theme = str((load_yaml(ROOT / "policy.yaml").get("screenshots") or {}).get("theme") or "light")
-    chosen = store_screenshots(index, theme)
+    channels = list(Policy.load().channels)
+    chosen: list[dict] = []
+    seen: set[str] = set()
+    for target, store in listing_pairs(index, channels):
+        for shot in listing_captures(index, target, store):
+            if str(shot.get("path")) not in seen:
+                seen.add(str(shot.get("path")))
+                chosen.append(shot)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     problems: list[str] = []
@@ -1109,33 +1199,31 @@ def cmd_listing(args: argparse.Namespace) -> int:
     return 0
 
 
-def screenshot_groups(index: dict) -> list[tuple[tuple[str, str, str, str], list[dict]]]:
-    """The mobile screenshots, grouped by platform, device, theme and language, in review order:
-    iOS before Android, phones before tablets, light before dark, the site's default language
-    first."""
-    order_os = ["ios", "android"]
-    order_device = ["iphone", "ipad", "phone", "tablet"]
-    order_theme = ["light", "dark"]
+def screenshot_groups(captures: list[dict], index: dict) -> list[tuple[tuple[str, str, str], list[dict]]]:
+    """Listing captures grouped by store, device kind and language, in review order: the App
+    Store before Google Play, phones before tablets, the site's default language first; within
+    a group, listing order."""
+    order_store = list(STORE_LABELS)
+    order_kind = ["iphone", "ipad", "phone", "tablet"]
     order_locale = list(index.get("locales") or [])
-    groups: dict[tuple[str, str, str, str], list[dict]] = {}
-    for shot in index.get("screenshots") or []:
-        if shot.get("os") not in order_os:
-            continue
-        key = (str(shot["os"]), str(shot.get("device", "")), str(shot.get("theme", "")), str(shot.get("locale", "")))
+    groups: dict[tuple[str, str, str], list[dict]] = {}
+    for shot in captures:
+        key = (str(shot["store"]), str(shot["kind"]), str(shot.get("locale", "")))
         groups.setdefault(key, []).append(shot)
 
     def rank(key):
-        os_, device, theme, locale = key
+        store, kind, locale = key
         return (
-            order_os.index(os_),
-            order_device.index(device) if device in order_device else len(order_device),
-            order_theme.index(theme) if theme in order_theme else len(order_theme),
+            order_store.index(store) if store in order_store else len(order_store),
+            store,
+            order_kind.index(kind) if kind in order_kind else len(order_kind),
+            kind,
             order_locale.index(locale) if locale in order_locale else len(order_locale),
             locale,
         )
 
     return [
-        (key, sorted(groups[key], key=lambda s: (s.get("store") or 0, str(s.get("shot", "")))))
+        (key, sorted(groups[key], key=lambda s: (s["position"], str(s.get("shot", "")))))
         for key in sorted(groups, key=rank)
     ]
 
@@ -1148,20 +1236,20 @@ def screenshot_section(index: dict, url: str, budget: int = COMMENT_BUDGET, arti
     page instead of inlining, and the block says so.
     """
     site = str(index.get("site") or url.rsplit("/", 2)[0]).rstrip("/")
-    theme = str((load_yaml(ROOT / "policy.yaml").get("screenshots") or {}).get("theme") or "light")
-    listing = store_screenshots(index, theme)
+    channels = list(Policy.load().channels)
+    listing = [s for target, store in listing_pairs(index, channels) for s in listing_captures(index, target, store)]
     if not listing:
         return (
-            f"No screenshots are marked for the store listing in the [gallery index]({url}). "
-            "The walkthrough marks them with `store: N` on a `screenshot:` step."
+            f"No screenshots are declared for the store listings in the [gallery index]({url}). "
+            "The app declares them in store/storefront.toml under `[storefront.<target>.<store>.screenshots]`, "
+            "naming its walkthrough's `screenshot:` steps (https://daybrite.dev/docs/store#screenshots)."
         )
-    groups = screenshot_groups({**index, "screenshots": listing})
+    groups = screenshot_groups(listing, index)
 
     def summary(key, count):
-        os_, device, _theme, locale = key
-        store = "App Store" if os_ == "ios" else "Google Play"
+        store, kind, locale = key
         return (
-            f"{store} listing ({DEVICE_NAMES.get(device, device or 'device')}, "
+            f"{STORE_LABELS.get(store, store)} listing ({DEVICE_NAMES.get(kind, kind or 'device')}, "
             f"{LANGUAGE_NAMES.get(locale, locale or 'default')}) · {count}"
         )
 
@@ -1176,7 +1264,7 @@ def screenshot_section(index: dict, url: str, budget: int = COMMENT_BUDGET, arti
         return f"<details><summary>{summary(key, len(shots))}</summary>\n\n<p>{images}</p>\n</details>"
 
     def folded(key, shots):
-        locale = key[3]
+        locale = key[2]
         page = f"{site}/{locale}/main/gallery/" if locale else f"{site}/main/gallery/"
         return (
             f"<details><summary>{summary(key, len(shots))}</summary>\n\n"
@@ -1209,7 +1297,9 @@ def screenshot_section(index: dict, url: str, budget: int = COMMENT_BUDGET, arti
     # reviewer still sees what exists and where.
     locales = list(index.get("locales") or [])
     def fold_rank(i):
-        os_, device, theme, locale = groups[i][0]
+        store, kind, locale = groups[i][0]
+        theme = "light"
+        device = kind
         return (
             -(locales.index(locale) if locale in locales else len(locales)),
             0 if theme == "dark" else 1,
@@ -1223,16 +1313,32 @@ def screenshot_section(index: dict, url: str, budget: int = COMMENT_BUDGET, arti
     return "\n\n".join([head] + blocks)
 
 
+def listing_name(text: str, yaml_form: bool) -> str | None:
+    """The default locale's `name` from a storefront file's `[storefront.metadata]`, or None."""
+    try:
+        doc = yaml.safe_load(text) if yaml_form else tomllib.loads(text)
+    except (yaml.YAMLError, tomllib.TOMLDecodeError, ValueError):
+        return None
+    metadata = ((doc or {}).get("storefront") or {}).get("metadata") or {}
+    name = metadata.get("name")
+    return name.strip() if isinstance(name, str) and name.strip() else None
+
+
 def app_title(owner_repo: str, commit: str, token: str, flavor: str) -> str:
     """The app's name, from its store listing, then its manifest, then the token.
 
     The flavor's listing and manifest first, for an app that carries one, then the app's own:
-    a flavor is optional, and without one those are the files that name it.
+    a flavor is optional, and without one those are the files that name it. The listing's
+    name is `[storefront.metadata] name` in store/storefront.toml (or storefront.yaml, the same
+    tree; the names from before the rename, app.toml and app.yaml, still read).
     """
-    for path in (f"store-{flavor}/en/name.txt", "store/en/name.txt"):
-        name = fetch_text(owner_repo, commit, path)
-        if name:
-            return name.splitlines()[0].strip()
+    for directory in (f"store-{flavor}", "store"):
+        for file in ("storefront.toml", "storefront.yaml", "storefront.yml", "app.toml", "app.yaml", "app.yml"):
+            text = fetch_text(owner_repo, commit, f"{directory}/{file}")
+            if text:
+                name = listing_name(text, not file.endswith(".toml"))
+                if name:
+                    return name
     for path in (f"Day-{flavor}.toml", "Day.toml"):
         manifest = fetch_text(owner_repo, commit, path)
         if manifest:
@@ -1549,6 +1655,11 @@ def listing_review(app: "App", commit: str, args: argparse.Namespace) -> str:
     """The screenshot part of one app's review: from the listing this run extracted from the
     release (`--listing DIR`, one `listing-<token>/` per app, with the artifact links in
     `--artifacts JSON`), or, without one, from the release's index over the network."""
+    if not submits_screenshots(app):
+        return (
+            "The stores' screenshots are not part of this submission (`screenshots: false`); "
+            "each store keeps what it shows today."
+        )
     tag = str(app.data.get("tag", ""))
     url = release_asset_url(app, tag, "gallery.json")
     index = None
@@ -2681,21 +2792,46 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
             failures += 1
             print("FAIL a re-pinned submission claimed a source change")
 
-    # The screenshots in the comment come from the app's published gallery. A synthetic index
-    # stands in for the site, so this runs offline.
+    # The screenshots in the comment come from the release's index. A synthetic index stands in,
+    # so this runs offline: its `listings` are derived from a test-only `store` position on each
+    # entry, per platform and device kind, the way the day CLI resolves store/storefront.toml.
+    PLATFORMS = {"ios": "ios-uikit", "android": "android-mdc", "linux": "linux-gtk"}
+
+    def with_listings(index):
+        per: dict = {}
+        for e in index["screenshots"]:
+            pos = e.get("store")
+            if not isinstance(pos, int) or pos < 1:
+                continue
+            store = CHANNEL_TARGETS and {"ios-uikit": "apple-app-store", "android-mdc": "google-play-store"}.get(e["platform"])
+            if not store:
+                continue
+            kinds = per.setdefault(e["platform"], {"website": {}, "stores": {}})["stores"].setdefault(store, {})
+            item = {"shot": e["shot"], "theme": e.get("theme") or "light"}
+            lst = kinds.setdefault(e.get("device") or "default", {}).setdefault(e.get("locale") or "default", [])
+            while len(lst) < pos:
+                lst.append(None)
+            lst[pos - 1] = item
+        for target in per.values():
+            for kinds in target["stores"].values():
+                for kind, by_locale in kinds.items():
+                    for locale, lst in by_locale.items():
+                        by_locale[locale] = [x for x in lst if x]
+        return {**index, "listings": per}
+
     def shot(os_, device, theme, locale, name, store=1):
-        return {"os": os_, "device": device, "theme": theme, "locale": locale, "shot": name, "store": store,
+        return {"os": os_, "platform": PLATFORMS[os_], "device": device, "theme": theme, "locale": locale, "shot": name, "store": store,
                 "title": name.title(), "url": f"https://example.test/App/gallery/{os_}/{device}/{theme}/{locale}/{name}.png"}
-    index = {
+    index = with_listings({
         "site": "https://example.test/App", "generated": "2026-09-23T05:01:54Z",
         "locales": ["en", "fr"],
         "screenshots": [
             shot("android", "phone", "light", "en", "home"), shot("ios", "iphone", "light", "fr", "home"),
             shot("ios", "iphone", "light", "en", "home"), shot("ios", "iphone", "light", "en", "about", 2),
-            shot("ios", "iphone", "dark", "en", "home"),     # the other theme: not the listing's
+            shot("ios", "iphone", "dark", "en", "home", None),     # the other theme: not the listing's
             shot("linux", "desktop", "light", "en", "home"),  # not a store platform
         ],
-    }
+    })
     section = screenshot_section(index, "https://example.test/App/gallery/gallery.json")
     headings = [line[len("<details><summary>"):line.index("</summary>")]
                 for line in section.splitlines() if line.startswith("<details><summary>")]
@@ -2705,7 +2841,7 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
         "Google Play listing (Phone, English) · 1",
     ]
     if headings == wanted and "linux" not in section and '<img src="https://example.test/App/gallery/ios/iphone/light/en/about.png"' in section:
-        print("ok   the comment groups the mobile screenshots by platform, device, theme and language")
+        print("ok   the comment groups the listing screenshots by store, device and language")
     else:
         failures += 1
         print(f"FAIL the screenshot groups came out as {headings}")
@@ -2717,25 +2853,25 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
         print("FAIL folding for size did not keep the headings or link the gallery page")
     # The listing's screenshots: marked with `store: N`, validated against each store's sizes.
     def shot(os_, device, theme, locale, name, w, h, store=None):
-        return {"os": os_, "device": device, "theme": theme, "locale": locale, "shot": name, "store": store,
+        return {"os": os_, "platform": PLATFORMS[os_], "device": device, "theme": theme, "locale": locale, "shot": name, "store": store,
                 "width": w, "height": h, "url": f"https://example.test/App/main/gallery/{os_}/{device}/{theme}/{locale}/{name}.png"}
-    listing_index = {"locales": ["en", "fr"], "screenshots": [
+    listing_index = with_listings({"locales": ["en", "fr"], "screenshots": [
         shot("ios", "iphone", "light", "en", "home", 1320, 2868, 1),
-        shot("ios", "iphone", "dark", "en", "home", 1320, 2868, 1),      # the other theme: not taken
-        shot("ios", "iphone", "light", "en", "smoke", 1320, 2868),        # unmarked: not taken
+        shot("ios", "iphone", "dark", "en", "home", 1320, 2868),         # the other theme: not taken
+        shot("ios", "iphone", "light", "en", "smoke", 1320, 2868),        # not declared: not taken
         shot("ios", "ipad", "light", "en", "home", 2752, 2064, 1),
         shot("android", "phone", "light", "en", "home", 1080, 1920, 1),
-        shot("android", "tablet", "light", "en", "home", 1280, 800, 1),
+        shot("android", "tablet", "light", "en", "home", 1920, 1200, 1),
         shot("ios", "iphone", "light", "fr", "home", 1320, 2868, 1),
         shot("ios", "ipad", "light", "fr", "home", 2752, 2064, 1),
         shot("android", "phone", "light", "fr", "home", 1080, 1920, 1),
-    ]}
-    taken = store_screenshots(listing_index, "light")
-    if len(taken) == 7 and all(s["theme"] == "light" and s["store"] == 1 for s in taken):
-        print("ok   the listing takes the marked captures in the catalog's theme and no others")
+    ]})
+    taken = listing_captures(listing_index, "ios-uikit", "apple-app-store") + listing_captures(listing_index, "android-mdc", "google-play-store")
+    if len(taken) == 7 and all(s["theme"] == "light" and s["position"] == 1 for s in taken):
+        print("ok   the listing takes the declared captures in the declared theme and no others")
     else:
         failures += 1
-        print(f"FAIL the listing took {[(s['os'], s['device'], s['theme'], s['shot']) for s in taken]}")
+        print(f"FAIL the listing took {[(s['platform'], s['kind'], s['theme'], s['shot']) for s in taken]}")
     policy_raw = load_yaml(ROOT / "policy.yaml")
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "Faire-Games.yaml"
@@ -2747,15 +2883,22 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
         else:
             failures += 1
             print(f"FAIL a valid listing was refused: {[p.message for p in clean]}")
-        # A 20:9 phone capture, which Play refuses: the long side is more than twice the short.
+        # Play's API takes a 20:9 phone (2.22:1 is within its 2.3), refuses a taller one, and
+        # refuses the halved CI tablet (800 px on the short side, under its 1080 floor).
         tall = {**listing_index, "screenshots": [
             dict(s, width=1080, height=2400) if s["device"] == "phone" else s for s in listing_index["screenshots"]]}
-        found = [p.message for p in screenshot_problems(app, tall, policy_raw, "x")]
-        if any("2.22:1" in m and "9:16" in m for m in found):
-            print("ok   a phone capture Google Play would refuse is named, with the ratio and the fix")
+        taller = {**listing_index, "screenshots": [
+            dict(s, width=1080, height=2500) if s["device"] == "phone" else s for s in listing_index["screenshots"]]}
+        halved = {**listing_index, "screenshots": [
+            dict(s, width=1280, height=800) if s["device"] == "tablet" else s for s in listing_index["screenshots"]]}
+        ok_tall = not screenshot_problems(app, tall, policy_raw, "x")
+        found = [p.message for p in screenshot_problems(app, taller, policy_raw, "x")]
+        found_halved = [p.message for p in screenshot_problems(app, halved, policy_raw, "x")]
+        if ok_tall and any("2.31:1" in m for m in found) and any("1280×800" in m and "Nexus 7 2013" in m for m in found_halved):
+            print("ok   Play's enforced limits: a 20:9 phone passes, a taller one and a halved tablet are named with the fix")
         else:
             failures += 1
-            print(f"FAIL the tall phone capture was not refused: {found}")
+            print(f"FAIL the Play limits came out wrong: tall ok={ok_tall}, taller={found}, halved={found_halved}")
         # An iPhone size Apple does not list.
         odd = {**listing_index, "screenshots": [
             dict(s, width=1290, height=2778) if s["device"] == "iphone" else s for s in listing_index["screenshots"]]}
@@ -2774,14 +2917,13 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
         else:
             failures += 1
             print(f"FAIL the missing French iPad set passed: {found}")
-        # Nothing marked at all: the message says what to add.
-        found = [p.message for p in screenshot_problems(app, {**listing_index, "screenshots": [
-            dict(s, store=None) for s in listing_index["screenshots"]]}, policy_raw, "x")]
-        if any("marks none" in m and "`store: N`" in m for m in found):
-            print("ok   a gallery with nothing marked is told how to mark it")
+        # Nothing declared at all: the message says what to add, and where.
+        found = [p.message for p in screenshot_problems(app, {**listing_index, "listings": {}}, policy_raw, "x")]
+        if any("declares none" in m and "[storefront.ios-uikit.apple-app-store.screenshots]" in m for m in found):
+            print("ok   an index with nothing declared is told what to declare")
         else:
             failures += 1
-            print(f"FAIL an unmarked gallery passed: {found}")
+            print(f"FAIL an undeclared gallery passed: {found}")
         # The review shows the listing alone, in listing order, and names what it cannot show.
         unseen_index = {**listing_index, "screenshots": [
             ({k: v for k, v in s.items() if k != "url"} if s.get("locale") == "fr" else s)
@@ -2831,14 +2973,14 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
         temp_path = Path(temp)
         good = b"home-png"
         entries = [
-            {"os": "ios", "device": "iphone", "theme": "light", "locale": "en", "store": 1, "shot": "home",
+            {"os": "ios", "platform": "ios-uikit", "device": "iphone", "theme": "light", "locale": "en", "store": 1, "shot": "home",
              "path": "gallery/ios-uikit/iphone/light/home.png", "sha256": hashlib.sha256(good).hexdigest()},
-            {"os": "ios", "device": "iphone", "theme": "dark", "locale": "en", "store": 1, "shot": "home",
+            {"os": "ios", "platform": "ios-uikit", "device": "iphone", "theme": "dark", "locale": "en", "shot": "home",
              "path": "gallery/ios-uikit/iphone/dark/home.png", "sha256": "ignored"},
-            {"os": "ios", "device": "iphone", "theme": "light", "locale": "en", "shot": "smoke",
+            {"os": "ios", "platform": "ios-uikit", "device": "iphone", "theme": "light", "locale": "en", "shot": "smoke",
              "path": "gallery/ios-uikit/iphone/light/smoke.png", "sha256": "ignored"},
         ]
-        (temp_path / "gallery.json").write_text(json.dumps({"screenshots": entries}))
+        (temp_path / "gallery.json").write_text(json.dumps(with_listings({"screenshots": entries})))
         with zipfile.ZipFile(temp_path / "screenshots.zip", "w") as archive:
             archive.writestr("ios-uikit/iphone/light/home.png", good)
             archive.writestr("ios-uikit/iphone/dark/home.png", b"dark")
@@ -2871,6 +3013,32 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
         failures += 1
         print("FAIL the review did not link the listing artifact")
 
+    # `screenshots: false` is a boolean, rides into every matrix row, and switches the review off.
+    off = App(path=Path("apps/Off.yaml"), data={"token": "Off", "repo": "example/off", "tag": "v1.0.0", "commit": "0" * 40, "screenshots": False, "distribution": {"ios-uikit": ["apple-app-store"]}})
+    typo = App(path=Path("apps/Typo.yaml"), data={**off.data, "screenshots": "no"})
+    if any("screenshots takes true or false" in p.message for p in validate_app(typo, policy)) \
+            and not any("screenshots" in p.message for p in validate_app(off, policy)):
+        print("ok   screenshots takes a boolean")
+    else:
+        failures += 1
+        print("FAIL the screenshots key was not validated as a boolean")
+    NO_SCREENSHOTS["set"] = False
+    on_row = matrix_entry(App(path=Path("apps/On.yaml"), data={**off.data, "token": "On"}), policy)
+    off_row = matrix_entry(off, policy)
+    NO_SCREENSHOTS["set"] = True
+    forced_row = matrix_entry(App(path=Path("apps/On.yaml"), data={**off.data, "token": "On"}), policy)
+    NO_SCREENSHOTS["set"] = False
+    if on_row["screenshots"] is False and off_row["screenshots"] is False and forced_row["screenshots"] is False and matrix_entry(App(path=Path("apps/Yes.yaml"), data={**off.data, "token": "Yes", "screenshots": True}), policy)["screenshots"] is True:
+        print("ok   the matrix rows say whether the stores' screenshots are replaced")
+    else:
+        failures += 1
+        print(f"FAIL the screenshots flag on the rows came out as {on_row['screenshots']}, {off_row['screenshots']}, {forced_row['screenshots']}")
+    if "not part of this submission" in listing_review(off, "0" * 40, argparse.Namespace(listing=None, artifacts=None)):
+        print("ok   the review says when the screenshots are left alone")
+    else:
+        failures += 1
+        print("FAIL the review did not say the screenshots are left alone")
+
     # The flavor follows this catalog's name, so a fork builds its own without editing anything.
     expected = ROOT.name.removesuffix("-apps")
     if policy.flavor == expected:
@@ -2900,6 +3068,18 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
         print(f"{'ok  ' if ok else 'FAIL'} two submissions with one title")
         failures += 0 if ok else 1
 
+    # The app's name is the default locale's `name` in the storefront file, TOML or YAML.
+    toml_text = '[storefront.metadata]\nname = "Games Fair"\n[storefront.metadata.fr]\nname = "Jeux"\n'
+    yaml_text = "storefront:\n  metadata:\n    name: Games Fair\n    fr: { name: Jeux }\n"
+    ok = (
+        listing_name(toml_text, False) == "Games Fair"
+        and listing_name(yaml_text, True) == "Games Fair"
+        and listing_name("[storefront.submission-info]\n", False) is None
+        and listing_name("storefront: [", True) is None
+    )
+    print(f"{'ok  ' if ok else 'FAIL'} the listing name comes from [storefront.metadata]")
+    failures += 0 if ok else 1
+
     print(f"\n{failures} failure(s)")
     return 1 if failures else 0
 
@@ -2922,6 +3102,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--app", help="one token, in place of a git diff")
     p.add_argument("--channel", help="publish to this channel alone, for a re-run")
     p.add_argument("--lane", help="run this fastlane lane instead of the channel's, with --channel")
+    p.add_argument("--no-screenshots", action="store_true", help="leave the stores' screenshots alone this run")
     p.set_defaults(func=cmd_plan)
 
     p = sub.add_parser("review", help="summarize the source changes a submission proposes")

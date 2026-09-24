@@ -106,10 +106,26 @@ class FlowTests(unittest.TestCase):
             keep = verify["steps"][names.index("Keep the listing for the review and the submission")]
             self.assertEqual(keep["with"]["name"], "listing-${{ matrix.token }}")
         publish = WORKFLOWS["submit"]["jobs"]["publish"]
-        downloads = [s["with"]["name"] for s in publish["steps"] if s.get("uses", "").startswith("actions/download-artifact")]
-        self.assertIn("listing-${{ matrix.token }}", downloads)
+        downloads = [s for s in publish["steps"] if s.get("uses", "").startswith("actions/download-artifact")]
+        listing = next(s for s in downloads if s["with"]["name"] == "listing-${{ matrix.token }}")
+        self.assertIn("matrix.screenshots", str(listing["if"]))
         sign = next(s for s in publish["steps"] if s.get("uses") == "./.github/actions/sign-submit")
-        self.assertEqual(sign["with"]["screenshots"], "listing")
+        self.assertIn("matrix.screenshots && 'listing' || ''", sign["with"]["screenshots"])
+
+    def test_screenshots_can_be_left_alone(self):
+        """`screenshots: false` in the submission, or the publish workflow's input, keeps every
+        screenshot step out of the run and stages the listing without them."""
+        for name in ("pr", "publish"):
+            verify = WORKFLOWS[name]["jobs"]["verify"]
+            by_name = {s.get("name"): s for s in verify["steps"]}
+            for step in ("Fetch the release's screenshots", "Cut the listing out of the release",
+                         "Keep the listing for the review and the submission"):
+                self.assertEqual(" ".join(str(by_name[step]["if"]).split()), "${{ matrix.screenshots }}", (name, step))
+            self.assertIn('if [ "${{ matrix.screenshots }}" = true ]', by_name["Verify the submission"]["run"])
+        inputs = WORKFLOWS["publish"]["on"]["workflow_dispatch"]["inputs"] if "on" in WORKFLOWS["publish"] else WORKFLOWS["publish"][True]["workflow_dispatch"]["inputs"]
+        self.assertIs(inputs["screenshots"]["default"], True)
+        plan = WORKFLOWS["publish"]["jobs"]["plan"]
+        self.assertIn("--no-screenshots", " ".join(s.get("run", "") for s in plan["steps"]))
 
     def test_the_record_is_written_on_main(self):
         """The merge lands the submission; the record is a commit on top of it."""
