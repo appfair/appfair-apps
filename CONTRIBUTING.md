@@ -264,7 +264,9 @@ that needs a particular one. Otherwise the run requests a profile from Apple for
 publishing, against the certificate that will sign it.
 
 Adding a channel means an entry in `policy.yaml`, a property in `schema/app.schema.json`, and an
-arm in `.github/actions/sign-submit`. The selftest checks that the first two agree.
+arm in `.github/actions/sign-submit` (which signs and uploads through daybrite/actions'
+`sign-package` and `store-upload`, the same actions the shared Day workflow releases with). The
+selftest checks that the first two agree.
 
 Unknown keys are errors: the file is strict so that a misspelled key cannot silently do nothing.
 `policy.yaml` holds the patterns and lists that the checks apply, and editing it changes what the

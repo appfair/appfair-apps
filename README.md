@@ -307,7 +307,7 @@ scripts/package_compare.py       the package comparison stage B runs
 state/published.json             what has been published, written by the publish workflow
 .github/actions/build-app        stage A
 .github/actions/validate-package stage B
-.github/actions/sign-submit      stage C
+.github/actions/sign-submit      stage C (daybrite/actions' sign-package + store-upload, wrapped)
 .github/workflows/               checks, pr (A + B), publish (A + B + C + record),
                                  comment (the reviewer's summary)
 ```

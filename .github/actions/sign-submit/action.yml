@@ -2,7 +2,9 @@ name: Sign and submit a validated package
 description: >-
   Stage C: sign a package stage B has read, and upload it. The keys come from this repository's
   secrets and are named on the command line, so the app's manifest cannot choose them. The
-  package is re-signed as an archive, so none of the app's code runs.
+  package is re-signed as an archive, so none of the app's code runs. The signing and the upload
+  are daybrite/actions' `sign-package` and `store-upload`, the same actions the shared
+  `dayapp.yml` workflow releases with; this action wraps them in the queue's own checks.
 
 inputs:
   token:
@@ -225,175 +227,79 @@ runs:
         [ -n "$package" ] || { echo "::error::no package for ${{ inputs.target }}"; exit 1; }
         echo "package=$PWD/$package" >> "$GITHUB_OUTPUT"
 
-    # --- Android ---------------------------------------------------------------------------
-    - name: Sign the Android packages
+    # --- Sign, with the shared action -------------------------------------------------------
+    # daybrite/actions' `sign-package` holds the certificate in an ephemeral keychain it
+    # destroys when it is done, issues the App Store profile from the App Store Connect key when
+    # the catalog stores none, and signs the package with `day sign apply`, which takes the key
+    # material on the command line so the app's [signing] tables are not read and cannot
+    # influence which of this runner's variables are used. The same action signs in the shared
+    # dayapp.yml workflow, so the two pipelines sign one way.
+    - name: List the .apk beside the .aab
+      id: apks
       if: inputs.target == 'android-mdc'
       shell: bash
-      env:
-        KEYSTORE_B64: ${{ inputs.keystore-b64 }}
       run: |
         set -euo pipefail
-        [ -n "${KEYSTORE_B64:-}" ] || { echo "::error::no Play upload keystore in this repository's secrets"; exit 1; }
-        echo "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/upload.keystore"
-        # The .aab goes to Play; the .apk beside it is what the release carries, and an unsigned
-        # one cannot be installed, so both are signed with the same key. `day sign apply` takes
-        # the key on the command line, so the app's [signing] tables are not read and cannot
-        # influence which of this runner's variables are used.
-        "$DAY_BIN" sign apply "${{ steps.pick.outputs.package }}" \
-          --keystore "$RUNNER_TEMP/upload.keystore" \
-          --key-alias "$APPFAIR_KEY_ALIAS"
-        # An .apk takes zipalign and apksigner from the Android build-tools, where the .aab takes
-        # jarsigner. A runner without them must not stop a store submission, and an unsigned .apk
-        # must not reach the release, so one that cannot be signed is deleted here.
-        while IFS= read -r apk; do
-          if "$DAY_BIN" sign apply "$apk" \
-              --keystore "$RUNNER_TEMP/upload.keystore" \
-              --key-alias "$APPFAIR_KEY_ALIAS"; then
-            continue
-          fi
-          rm -f "$apk"
-          echo "::warning::$(basename "$apk") could not be signed on this runner, so it is left \
-          out of the release; the .aab Play receives is signed"
-        done < <(find "${{ inputs.packages }}" -maxdepth 1 -name '*.apk' | sort)
+        {
+          echo "list<<EOF"
+          find "${{ inputs.packages }}" -maxdepth 1 -name '*.apk' | sort
+          echo "EOF"
+        } >> "$GITHUB_OUTPUT"
 
-    # --- Apple -----------------------------------------------------------------------------
-    - name: Import the distribution certificate
-      if: inputs.target == 'ios-uikit'
-      shell: bash
-      env:
-        CERT_P12: ${{ inputs.apple-cert-p12 }}
-        CERT_PASSWORD: ${{ inputs.apple-cert-password }}
-      run: |
-        set -euo pipefail
-        [ -n "${CERT_P12:-}" ] || { echo "::error::no iOS distribution certificate in this repository's secrets"; exit 1; }
-        KEYCHAIN="$RUNNER_TEMP/appfair.keychain-db"
-        PASSWORD="$(openssl rand -hex 24)"
-        security create-keychain -p "$PASSWORD" "$KEYCHAIN"
-        security set-keychain-settings -lut 3600 "$KEYCHAIN"
-        security unlock-keychain -p "$PASSWORD" "$KEYCHAIN"
-        echo "$CERT_P12" | base64 --decode > "$RUNNER_TEMP/dist.p12"
-        chmod 600 "$RUNNER_TEMP/dist.p12"
-        security import "$RUNNER_TEMP/dist.p12" -k "$KEYCHAIN" -P "$CERT_PASSWORD" -T /usr/bin/codesign
-        security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$PASSWORD" "$KEYCHAIN" >/dev/null
-        security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
-        rm -f "$RUNNER_TEMP/dist.p12"
-        security find-identity -v -p codesigning "$KEYCHAIN"
-        # Compare against the imported certificate, so a mismatch is reported here instead of as
-        # codesign's "no identity found" later in the run.
-        security find-identity -v -p codesigning "$KEYCHAIN" | grep -q "${{ inputs.apple-identity }}" || {
-          echo "::error::the imported certificate is not \"${{ inputs.apple-identity }}\"; set DAY_APPLE_IDENTITY to the name above"
-          exit 1
-        }
-
-    - name: Issue the App Store profile
-      if: inputs.target == 'ios-uikit'
-      shell: bash
-      env:
-        # fastlane reports usage to its own servers unless told not to.
-        FASTLANE_OPT_OUT_USAGE: "1"
-        PROFILE_B64: ${{ inputs.apple-profile-b64 }}
-        ASC_KEY_ID: ${{ env.APPFAIR_ASC_KEY_ID }}
-        ASC_ISSUER: ${{ env.APPFAIR_ASC_ISSUER }}
-        ASC_KEY_PATH: ${{ env.APPFAIR_ASC_KEY_PATH }}
-        APPLE_TEAM: ${{ inputs.apple-team }}
+    - name: Sign the package
+      id: sign
+      uses: daybrite/actions/.github/actions/sign-package@main
+      with:
+        target: ${{ inputs.target }}
+        package: ${{ steps.pick.outputs.package }}
+        also-sign: ${{ steps.apks.outputs.list }}
+        keystore-b64: ${{ inputs.keystore-b64 }}
+        key-alias: ${{ env.APPFAIR_KEY_ALIAS }}
+        keystore-password: ${{ env.DAY_SIGN_STORE_PASS }}
+        key-password: ${{ env.DAY_SIGN_KEY_PASS }}
+        apple-cert-p12: ${{ inputs.apple-cert-p12 }}
+        apple-cert-password: ${{ inputs.apple-cert-password }}
+        apple-identity: ${{ inputs.apple-identity }}
+        apple-profile-b64: ${{ inputs.apple-profile-b64 }}
         # APP_ID comes from the app's manifest, read above; the catalog's value is the fallback
         # for a run that skipped that step.
-        FALLBACK_APP_ID: ${{ inputs.app-id }}
-      run: |
-        APP_ID="${APP_ID:-$FALLBACK_APP_ID}"
-        set -euo pipefail
-        DEST="$RUNNER_TEMP/appstore.mobileprovision"
+        app-id: ${{ env.APP_ID || inputs.app-id }}
+        apple-team: ${{ inputs.apple-team }}
+        asc-key-id: ${{ env.APPFAIR_ASC_KEY_ID }}
+        asc-issuer: ${{ env.APPFAIR_ASC_ISSUER }}
+        asc-key-path: ${{ env.APPFAIR_ASC_KEY_PATH }}
 
-        # A stored profile wins, for an app that needs a particular one.
-        if [ -n "${PROFILE_B64:-}" ]; then
-          echo "$PROFILE_B64" | base64 --decode > "$DEST"
-          echo "using the stored profile"
-        else
-          # Otherwise Apple issues one now for this app id, against the certificate imported
-          # above, so no profile is stored or renewed here.
-          [ -n "${ASC_KEY_ID:-}" ] && [ -n "${ASC_ISSUER:-}" ] && [ -s "${ASC_KEY_PATH:-}" ] || {
-            echo "::error::no App Store Connect key, so no profile can be issued for $APP_ID"
-            exit 1
-          }
-          [ -n "${APP_ID:-}" ] || { echo "::error::no app id to issue a profile for"; exit 1; }
-          # fastlane's API-key file, written where only this job can read it.
-          python3 -c 'import json, os, pathlib; print(json.dumps({"key_id": os.environ["ASC_KEY_ID"], "issuer_id": os.environ["ASC_ISSUER"], "key": pathlib.Path(os.environ["ASC_KEY_PATH"]).read_text(), "in_house": False}))' > "$RUNNER_TEMP/asc-key.json"
-          chmod 600 "$RUNNER_TEMP/asc-key.json"
-          command -v fastlane >/dev/null || sudo gem install fastlane --no-document
-          # `--force` regenerates the profile, so it carries the certificate this run signs
-          # with.
-          fastlane sigh \
-            --api_key_path "$RUNNER_TEMP/asc-key.json" \
-            --app_identifier "$APP_ID" \
-            ${APPLE_TEAM:+--team_id "$APPLE_TEAM"} \
-            --platform ios \
-            --force \
-            --output_path "$RUNNER_TEMP/profiles" \
-            --filename appstore.mobileprovision
-          mv "$RUNNER_TEMP/profiles/appstore.mobileprovision" "$DEST"
-          rm -f "$RUNNER_TEMP/asc-key.json"
-        fi
-        # Print what the profile is, for reading against a later signing failure.
-        security cms -D -i "$DEST" | plutil -p - | grep -E '"(Name|UUID|TeamIdentifier|ExpirationDate)"' || true
-
-    - name: Sign the .ipa
-      if: inputs.target == 'ios-uikit'
+    # --- Stage the listing and upload, with the shared action --------------------------------
+    # daybrite/actions' `store-upload` runs `day store stage` from the app's storefront and
+    # places the listing's screenshots: the captures the storefront's screenshots tables name,
+    # for every locale, from the tree the verify stage cut out of the release's screenshots.zip
+    # and kept as this run's artifact. Nothing is fetched here, so what the reviewer saw is what
+    # the store receives; the CLI holds the set to the store's rules once more, and holds the
+    # text to `day lint`'s. Then the lane runs in the staged tree with the package and the
+    # credentials under the names the generated lanes read.
+    - name: Check the channel
       shell: bash
       run: |
-        set -euo pipefail
-        # The profile and identity are given explicitly, so the app's [signing.ios] table is not
-        # read.
-        "$DAY_BIN" sign apply "${{ steps.pick.outputs.package }}" \
-          --profile "$RUNNER_TEMP/appstore.mobileprovision" \
-          --identity "${{ inputs.apple-identity }}"
-
-    # --- The listing, staged from the app's text and images ---------------------------------
-    - name: Stage the listing
-      shell: bash
-      env:
-        FLAVOR_ARGS: ${{ steps.flavor.outputs.args }}
-        LISTING: ${{ inputs.screenshots }}
-        TARGET: ${{ inputs.target }}
-      run: |
-        set -euo pipefail
-        # `day store stage` generates the fastlane tree from the listing's text files, and
-        # places the listing's screenshots: the captures the walkthrough marked `store: N`, for
-        # every locale, from the tree the verify stage cut out of the release's screenshots.zip
-        # and kept as this run's artifact. Nothing is fetched here, so what the reviewer saw is
-        # what the store receives; the CLI holds the set to the store's rules once more.
-        if [ -z "$LISTING" ]; then
-          echo "the stores' screenshots are left alone (no listing tree named)"
-          (cd app-data && "$DAY_BIN" $FLAVOR_ARGS store stage -p "$TARGET")
-        else
-          [ -f "$LISTING/gallery.json" ] || { echo "::error::$LISTING/gallery.json is missing; the listing-${{ inputs.token }} artifact the verify stage uploads was not downloaded"; exit 1; }
-          echo "$(find "$LISTING" -name '*.png' | wc -l) capture(s) in $LISTING"
-          (cd app-data && "$DAY_BIN" $FLAVOR_ARGS store stage -p "$TARGET" \
-             --screenshots "$GITHUB_WORKSPACE/$LISTING/gallery.json")
-        fi
-        echo "screenshots placed:"
-        find app-data/build/day/store -type f \( -name '*.png' -o -name '*.jpg' \) | sed 's|app-data/build/day/store/||' | sort | head -40
-        find app-data/build/day/store -maxdepth 3 -type d | head -20
-
-    - name: Upload to ${{ inputs.channel }} (${{ inputs.lane }})
-      shell: bash
-      working-directory: app-data/build/day/store/${{ inputs.target }}
-      env:
-        FASTLANE_OPT_OUT_USAGE: "1"
-        DAY_AAB: ${{ inputs.target == 'android-mdc' && steps.pick.outputs.package || '' }}
-        DAY_IPA: ${{ inputs.target == 'ios-uikit' && steps.pick.outputs.package || '' }}
-        DAY_ASC_KEY_ID: ${{ env.APPFAIR_ASC_KEY_ID }}
-        DAY_ASC_ISSUER: ${{ env.APPFAIR_ASC_ISSUER }}
-        DAY_ASC_KEY: ${{ env.APPFAIR_ASC_KEY_PATH }}
-        SUPPLY_JSON_KEY: ${{ env.APPFAIR_PLAY_KEY_PATH }}
-      run: |
-        set -euo pipefail
         case "${{ inputs.channel }}" in
           apple-app-store|google-play-store) ;;
           *) echo "::error::${{ inputs.channel }} is declared in policy.yaml but not handled here"; exit 1 ;;
         esac
-        read -ra lane <<< "${{ inputs.lane }}"   # "android upload" is two fastlane arguments
-        command -v fastlane >/dev/null || sudo gem install fastlane --no-document
-        fastlane "${lane[@]}"
+
+    - name: Upload to ${{ inputs.channel }} (${{ inputs.lane }})
+      uses: daybrite/actions/.github/actions/store-upload@main
+      with:
+        target: ${{ inputs.target }}
+        package: ${{ steps.sign.outputs.package }}
+        lane: ${{ inputs.lane }}
+        project-path: app-data
+        flavor: ${{ inputs.flavor }}
+        # Empty leaves the stores' screenshots alone (`screenshots: false` in the submission,
+        # or a manual publish that asked for it).
+        screenshots: ${{ inputs.screenshots != '' && format('{0}/{1}/gallery.json', github.workspace, inputs.screenshots) || '' }}
+        asc-key-id: ${{ env.APPFAIR_ASC_KEY_ID }}
+        asc-issuer: ${{ env.APPFAIR_ASC_ISSUER }}
+        asc-key-path: ${{ env.APPFAIR_ASC_KEY_PATH }}
+        play-json-key-path: ${{ env.APPFAIR_PLAY_KEY_PATH }}
 
     # An upload is not a submission: `deliver` can send a binary while the version stays in
     # Prepare for Submission with nothing attached. These steps read the store's own records.
