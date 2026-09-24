@@ -33,6 +33,13 @@ inputs:
   lane:
     description: The fastlane lane to run, such as "android upload" or "ios release".
     required: true
+  screenshots:
+    description: >-
+      The listing's capture tree, with gallery.json at its root: what `queue.py listing` cut
+      out of the release's screenshots.zip and the verify stage kept as this run's
+      `listing-<token>` artifact. The same files the reviewer was shown go to the store.
+    required: false
+    default: listing
   day-version:
     description: Which day CLI signs and stages.
     required: false
@@ -344,26 +351,19 @@ runs:
       shell: bash
       env:
         FLAVOR_ARGS: ${{ steps.flavor.outputs.args }}
-        RELEASE: https://github.com/${{ inputs.repo }}/releases/download/${{ inputs.tag }}
+        LISTING: ${{ inputs.screenshots }}
         TARGET: ${{ inputs.target }}
       run: |
         set -euo pipefail
         # `day store stage` generates the fastlane tree from the listing's text files, and
         # places the listing's screenshots: the captures the walkthrough marked `store: N`, for
-        # every locale, from the release the tag names. The app's CI attached its merged index
-        # (gallery.json) and capture tree (screenshots.zip) to that release, so the set is the
-        # tagged version's own; verify already read the same index. Only this target's subtree
-        # is unpacked, since the zip carries every platform's captures.
-        mkdir -p release-shots
-        curl -fsSL --retry 3 -o release-shots/gallery.json "$RELEASE/gallery.json" \
-          || { echo "::error::$RELEASE/gallery.json could not be downloaded; the release carries no screenshot index"; exit 1; }
-        curl -fsSL --retry 3 -o "$RUNNER_TEMP/screenshots.zip" "$RELEASE/screenshots.zip" \
-          || { echo "::error::$RELEASE/screenshots.zip could not be downloaded; the release carries no captures"; exit 1; }
-        unzip -qo "$RUNNER_TEMP/screenshots.zip" "$TARGET/*" -d release-shots
-        rm -f "$RUNNER_TEMP/screenshots.zip"
-        echo "$(find release-shots -name '*.png' | wc -l) capture(s) from $RELEASE/screenshots.zip"
+        # every locale, from the tree the verify stage cut out of the release's screenshots.zip
+        # and kept as this run's artifact. Nothing is fetched here, so what the reviewer saw is
+        # what the store receives; the CLI holds the set to the store's rules once more.
+        [ -f "$LISTING/gallery.json" ] || { echo "::error::$LISTING/gallery.json is missing; the listing-${{ inputs.token }} artifact the verify stage uploads was not downloaded"; exit 1; }
+        echo "$(find "$LISTING" -name '*.png' | wc -l) capture(s) in $LISTING"
         (cd app-data && "$DAY_BIN" $FLAVOR_ARGS store stage -p "$TARGET" \
-           --screenshots "$GITHUB_WORKSPACE/release-shots/gallery.json")
+           --screenshots "$GITHUB_WORKSPACE/$LISTING/gallery.json")
         echo "screenshots placed:"
         find app-data/build/day/store -type f \( -name '*.png' -o -name '*.jpg' \) | sed 's|app-data/build/day/store/||' | sort | head -40
         find app-data/build/day/store -maxdepth 3 -type d | head -20

@@ -42,9 +42,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      # For the review comment. A pull request from this repository's own branches, which is
-      # every submission, carries a token that can write it; comment.yml covers a fork's.
-      pull-requests: write
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
       build-matrix: ${{ steps.plan.outputs.build-matrix }}
@@ -86,38 +83,6 @@ jobs:
       # The range between the published commit and the proposed one, for the reviewer. Posted by
       # comment.yml, since a fork pull request gets a read-only token here. A failure to write it
       # leaves the checks alone.
-      - name: Summarize the source changes
-        if: steps.plan.outputs.count != '0'
-        continue-on-error: true
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          python3 scripts/queue.py review --changed-from "origin/${{ github.base_ref }}" \
-            --out review.md
-          echo "${{ github.event.pull_request.number }}" > review-pr.txt
-      # Posted from here rather than after the run: the run waits for a reviewer at the
-      # submission stage, and the reviewer needs this comment before approving, not after.
-      - name: Post the summary
-        if: >-
-          steps.plan.outputs.count != '0'
-          && github.event.pull_request.head.repo.full_name == github.repository
-        uses: ./.github/actions/post-review
-        with:
-          pr: ${{ github.event.pull_request.number }}
-          token: ${{ github.token }}
-      # For a fork's pull request, whose token cannot comment: comment.yml posts it from the base
-      # branch once this run completes.
-      - name: Upload the summary
-        if: steps.plan.outputs.count != '0'
-        uses: actions/upload-artifact@v7
-        with:
-          name: review-comment
-          path: |
-            review.md
-            review-pr.txt
-          if-no-files-found: ignore
-      # The label that waives a comparison a submission cannot pass. The run records its use.
       - name: Read the waiver label
         id: label
         env:
@@ -222,13 +187,102 @@ jobs:
             (cd app-data && "$DAY_BIN" metadata --json) > metadata.json
           fi
           cat metadata.json
+      # The release the tag names carries the walkthrough's captures (screenshots.zip) and their
+      # index (gallery.json); the shared Day workflow attaches both. They are fetched once, here:
+      # the verify below reads the index, the listing's captures are cut out of the zip and kept
+      # as this run's artifact, and the review and the store submission both take that artifact,
+      # so the reviewer approves the files the store receives.
+      - name: Fetch the release's screenshots
+        env:
+          RELEASE: https://github.com/${{ matrix.repo }}/releases/download/${{ matrix.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p release-shots
+          curl -fsSL --retry 3 -o release-shots/gallery.json "$RELEASE/gallery.json" \
+            || { echo "::error file=apps/${{ matrix.token }}.yaml::$RELEASE/gallery.json could not be downloaded. An App Fair submission takes the listing's screenshots from the release; the shared Day workflow attaches gallery.json and screenshots.zip to every release whose dayscripts captured screenshots"; exit 1; }
+          curl -fsSL --retry 3 -o release-shots/screenshots.zip "$RELEASE/screenshots.zip" \
+            || { echo "::error file=apps/${{ matrix.token }}.yaml::$RELEASE/screenshots.zip could not be downloaded; the release carries its index and not its captures"; exit 1; }
       - name: Verify the submission
         run: |
           python3 scripts/queue.py verify --app "${{ matrix.token }}" --metadata metadata.json \
-            --tag-commit "${TAG_COMMIT:-}"
+            --tag-commit "${TAG_COMMIT:-}" --gallery release-shots/gallery.json
+      - name: Cut the listing out of the release
+        run: |
+          set -euo pipefail
+          python3 scripts/queue.py listing --gallery release-shots/gallery.json \
+            --zip release-shots/screenshots.zip --out listing
+          "$DAY_BIN" --project app-data ${{ matrix.flavor != '' && format('--flavor {0}', matrix.flavor) || '' }} \
+            store screenshots "$PWD/listing/gallery.json"
+      - name: Keep the listing for the review and the submission
+        uses: actions/upload-artifact@v7
+        with:
+          name: listing-${{ matrix.token }}
+          path: listing
+          if-no-files-found: error
 
   # Stage A. The only job that runs the app's code: its build.rs, its Gradle and Xcode phases,
   # its dependencies. No secrets reach it, and it produces files.
+  # The reviewer's comment, posted once verify has cut each listing out of its release, so the
+  # screenshots it shows are the files the stores will receive. That is still before the
+  # submission stage waits for approval, which is when the comment is read. A failed verify
+  # leaves its app's listing out; the comment still carries the source summary. A pull request
+  # from this repository's own branches, which is every submission, carries a token that can
+  # write the comment; comment.yml covers a fork's.
+  review:
+    name: review
+    needs: [plan, verify]
+    if: ${{ !cancelled() && needs.plan.outputs.count != '0' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Collect the listings
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          pattern: listing-*
+          path: listing
+      - name: Find the listing artifacts' addresses
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Each `listing-<token>` artifact's page, for the comment to link.
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" --paginate \
+            | jq -c --arg base "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" \
+              '[.artifacts[] | select(.name | startswith("listing-")) | {(.name | ltrimstr("listing-")): ($base + "/" + (.id | tostring))}] | add // {}' \
+            > artifacts.json
+          cat artifacts.json
+      - name: Summarize the source changes
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
+          python3 scripts/queue.py review --changed-from "origin/${{ github.base_ref }}" \
+            --listing listing --artifacts artifacts.json --out review.md
+          echo "${{ github.event.pull_request.number }}" > review-pr.txt
+      - name: Post the summary
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        uses: ./.github/actions/post-review
+        with:
+          pr: ${{ github.event.pull_request.number }}
+          token: ${{ github.token }}
+      - name: Upload the summary
+        uses: actions/upload-artifact@v7
+        with:
+          name: review-comment
+          path: |
+            review.md
+            review-pr.txt
+          if-no-files-found: ignore
+
   build:
     name: build ${{ matrix.token }} ${{ matrix.target }}
     needs: [plan, lint, verify]

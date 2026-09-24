@@ -1067,6 +1067,48 @@ def screenshot_problems(app: "App", index: dict, policy_raw: dict, path: str) ->
     return problems
 
 
+def cmd_listing(args: argparse.Namespace) -> int:
+    """Extract the listing's captures from a release's screenshots.zip into a capture tree.
+
+    The tree is what the later stages use: `day store stage --screenshots <out>/gallery.json`
+    places from it, and the review's artifact holds it, so the stores receive exactly what the
+    reviewer was shown. Each file is checked against the index's sha-256 as it is written.
+    """
+    import hashlib
+    import zipfile
+
+    index = json.loads(Path(args.gallery).read_text())
+    theme = str((load_yaml(ROOT / "policy.yaml").get("screenshots") or {}).get("theme") or "light")
+    chosen = store_screenshots(index, theme)
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    problems: list[str] = []
+    written = 0
+    with zipfile.ZipFile(args.zip) as archive:
+        members = set(archive.namelist())
+        for shot in chosen:
+            member = str(shot.get("path") or "").removeprefix("gallery/")
+            if not member or member not in members:
+                problems.append(f"{shot.get('path')} is in gallery.json and not in {args.zip}")
+                continue
+            data = archive.read(member)
+            digest = hashlib.sha256(data).hexdigest()
+            if shot.get("sha256") and digest != shot.get("sha256"):
+                problems.append(f"{member} in {args.zip} is not the file gallery.json describes (sha-256 differs)")
+                continue
+            target = out / member
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+            written += 1
+    (out / "gallery.json").write_text(json.dumps(index))
+    for problem in problems:
+        Problem("listing", problem).emit()
+    if problems:
+        return 1
+    print(f"{written} listing capture(s) from {args.zip} → {out}")
+    return 0
+
+
 def screenshot_groups(index: dict) -> list[tuple[tuple[str, str, str, str], list[dict]]]:
     """The mobile screenshots, grouped by platform, device, theme and language, in review order:
     iOS before Android, phones before tablets, light before dark, the site's default language
@@ -1098,7 +1140,7 @@ def screenshot_groups(index: dict) -> list[tuple[tuple[str, str, str, str], list
     ]
 
 
-def screenshot_section(index: dict, url: str, budget: int = COMMENT_BUDGET) -> str:
+def screenshot_section(index: dict, url: str, budget: int = COMMENT_BUDGET, artifact: tuple[str, str] | None = None) -> str:
     """The screenshots as folded blocks, one per platform, device, theme and language.
 
     Every block lists its images at thumbnail size, linked to the full capture. When the whole
@@ -1155,6 +1197,12 @@ def screenshot_section(index: dict, url: str, budget: int = COMMENT_BUDGET) -> s
         )
         + ":"
     )
+    if artifact:
+        name, link = artifact
+        head += (
+            f"\n\nThe complete set the stores receive, as this run's artifact: [`{name}`]({link}) "
+            f"(a zip of the captures with their `gallery.json`)."
+        )
     blocks = [inline(key, shots) for key, shots in groups]
     # Fold until the section fits, least useful first: other languages before the site's
     # default, dark before light, tablets before phones. Every group keeps its heading, so the
@@ -1497,6 +1545,32 @@ def review_section(
     return "\n".join(lines)
 
 
+def listing_review(app: "App", commit: str, args: argparse.Namespace) -> str:
+    """The screenshot part of one app's review: from the listing this run extracted from the
+    release (`--listing DIR`, one `listing-<token>/` per app, with the artifact links in
+    `--artifacts JSON`), or, without one, from the release's index over the network."""
+    tag = str(app.data.get("tag", ""))
+    url = release_asset_url(app, tag, "gallery.json")
+    index = None
+    artifact = None
+    listing_dir = Path(args.listing) if getattr(args, "listing", None) else None
+    if listing_dir:
+        for candidate in (listing_dir / f"listing-{app.token}", listing_dir / app.token):
+            if (candidate / "gallery.json").is_file():
+                index = json.loads((candidate / "gallery.json").read_text())
+                break
+        links = {}
+        if getattr(args, "artifacts", None):
+            links = json.loads(Path(args.artifacts).read_text())
+        if index is not None and links.get(app.token):
+            artifact = (f"listing-{app.token}", str(links[app.token]))
+    if index is None:
+        index, why = gallery_index(app, tag)
+        if index is None:
+            return why
+    return screenshot_section(viewable(index, site_gallery(app, commit)), url, artifact=artifact)
+
+
 def review_body(sections: list[str]) -> str:
     """The comment itself, with the marker the workflow finds it by."""
     return "\n\n".join(
@@ -1538,11 +1612,7 @@ def cmd_review(args: argparse.Namespace) -> int:
             stats = compare_stats(app.owner_repo, was_commit, commit)
         section = review_section(app, previous, policy, stats, asked=not args.offline)
         if not args.offline:
-            index, url = gallery_index(app, str(app.data.get("tag", "")))
-            if index:
-                section += "\n\n" + screenshot_section(viewable(index, site_gallery(app, commit)), url)
-            else:
-                section += "\n\n" + url
+            section += "\n\n" + listing_review(app, commit, args)
         sections.append(section)
 
     body = review_body(sections)
@@ -2753,6 +2823,54 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
         failures += 1
         print(f"FAIL the viewable urls came out as {seen}")
 
+    # The listing is cut out of the release's zip, file by file against the index's sha-256.
+    import hashlib
+    import tempfile
+    import zipfile
+    with tempfile.TemporaryDirectory() as temp:
+        temp_path = Path(temp)
+        good = b"home-png"
+        entries = [
+            {"os": "ios", "device": "iphone", "theme": "light", "locale": "en", "store": 1, "shot": "home",
+             "path": "gallery/ios-uikit/iphone/light/home.png", "sha256": hashlib.sha256(good).hexdigest()},
+            {"os": "ios", "device": "iphone", "theme": "dark", "locale": "en", "store": 1, "shot": "home",
+             "path": "gallery/ios-uikit/iphone/dark/home.png", "sha256": "ignored"},
+            {"os": "ios", "device": "iphone", "theme": "light", "locale": "en", "shot": "smoke",
+             "path": "gallery/ios-uikit/iphone/light/smoke.png", "sha256": "ignored"},
+        ]
+        (temp_path / "gallery.json").write_text(json.dumps({"screenshots": entries}))
+        with zipfile.ZipFile(temp_path / "screenshots.zip", "w") as archive:
+            archive.writestr("ios-uikit/iphone/light/home.png", good)
+            archive.writestr("ios-uikit/iphone/dark/home.png", b"dark")
+            archive.writestr("ios-uikit/iphone/light/smoke.png", b"smoke")
+        out = temp_path / "listing"
+        args = argparse.Namespace(gallery=str(temp_path / "gallery.json"), zip=str(temp_path / "screenshots.zip"), out=str(out))
+        code = cmd_listing(args)
+        files = sorted(str(f.relative_to(out)) for f in out.rglob("*") if f.is_file())
+        if code == 0 and files == ["gallery.json", "ios-uikit/iphone/light/home.png"] and (out / "ios-uikit/iphone/light/home.png").read_bytes() == good:
+            print("ok   the listing is cut out of the release's zip: the marked light captures and the index")
+        else:
+            failures += 1
+            print(f"FAIL the listing extraction wrote {files} (exit {code})")
+        with zipfile.ZipFile(temp_path / "screenshots.zip", "w") as archive:
+            archive.writestr("ios-uikit/iphone/light/home.png", b"not the same bytes")
+        was = os.environ.pop("GITHUB_ACTIONS", None)
+        code = cmd_listing(args)
+        if was is not None:
+            os.environ["GITHUB_ACTIONS"] = was
+        if code == 1:
+            print("ok   a capture that is not the file the index describes is refused")
+        else:
+            failures += 1
+            print("FAIL a zip that does not match its index was accepted")
+    # The comment names the run's artifact, which holds every capture the stores receive.
+    with_artifact = screenshot_section(listing_index, "https://example.test/x/gallery.json", artifact=("listing-App", "https://github.com/x/actions/runs/1/artifacts/2"))
+    if "[`listing-App`](https://github.com/x/actions/runs/1/artifacts/2)" in with_artifact:
+        print("ok   the review links the artifact holding the listing's captures")
+    else:
+        failures += 1
+        print("FAIL the review did not link the listing artifact")
+
     # The flavor follows this catalog's name, so a fork builds its own without editing anything.
     expected = ROOT.name.removesuffix("-apps")
     if policy.flavor == expected:
@@ -2812,7 +2930,15 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--app", help="one token, in place of a git diff")
     p.add_argument("--out", help="where to write the comment (default: stdout)")
     p.add_argument("--offline", action="store_true", help="skip the counts GitHub would supply")
+    p.add_argument("--listing", help="a directory of `listing-<token>/` trees `queue.py listing` wrote")
+    p.add_argument("--artifacts", help="a JSON file mapping each token to its listing artifact's URL")
     p.set_defaults(func=cmd_review)
+
+    p = sub.add_parser("listing", help="extract the listing's captures from a release's screenshots.zip")
+    p.add_argument("--gallery", required=True, help="the release's gallery.json")
+    p.add_argument("--zip", required=True, help="the release's screenshots.zip")
+    p.add_argument("--out", required=True, help="the capture tree to write, with gallery.json at its root")
+    p.set_defaults(func=cmd_listing)
 
     p = sub.add_parser("verify", help="check a submission against the app it points at")
     p.add_argument("--app", required=True, help="the app token")

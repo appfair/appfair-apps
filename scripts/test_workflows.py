@@ -71,17 +71,45 @@ class FlowTests(unittest.TestCase):
 
     def test_the_review_comment_is_posted_before_the_run_waits_for_approval(self):
         """The run pauses at the submission stage for a reviewer, and a comment posted only when
-        the run completes would arrive after the approval it exists to inform."""
-        plan = WORKFLOWS["pr"]["jobs"]["plan"]
-        self.assertEqual(plan["permissions"]["pull-requests"], "write")
-        names = [step.get("name") for step in plan["steps"]]
+        the run completes would arrive after the approval it exists to inform. It waits for
+        verify alone, which is what cuts the listing it shows out of the release."""
+        review = WORKFLOWS["pr"]["jobs"]["review"]
+        self.assertEqual(sorted(review["needs"]), ["plan", "verify"])
+        self.assertNotIn("submit", review["needs"])
+        self.assertNotIn("environment", review)
+        self.assertEqual(review["permissions"]["pull-requests"], "write")
+        names = [step.get("name") for step in review["steps"]]
         self.assertIn("Post the summary", names)
-        post = plan["steps"][names.index("Post the summary")]
+        post = review["steps"][names.index("Post the summary")]
         self.assertEqual(post["uses"], "./.github/actions/post-review")
         self.assertIn("head.repo.full_name == github.repository", " ".join(post["if"].split()))
+        summarize = review["steps"][names.index("Summarize the source changes")]
+        self.assertIn("--listing listing", summarize["run"])
         # A fork's pull request still gets its comment after the run, from the base branch.
         fork = WORKFLOWS["comment"]["jobs"]["comment"]
         self.assertIn("head_repository.full_name != github.repository", " ".join(fork["if"].split()))
+
+    def test_the_listing_is_cut_out_once_and_reused(self):
+        """Verify fetches the release's screenshots.zip and keeps the listing as an artifact;
+        the review shows it and the submission stages from it, so nothing is fetched twice and
+        the store receives the files the reviewer saw."""
+        for name in ("pr", "publish"):
+            verify = WORKFLOWS[name]["jobs"]["verify"]
+            names = [step.get("name") for step in verify["steps"]]
+            fetch = verify["steps"][names.index("Fetch the release's screenshots")]
+            self.assertIn("screenshots.zip", fetch["run"])
+            self.assertIn("--gallery release-shots/gallery.json",
+                          verify["steps"][names.index("Verify the submission")]["run"])
+            cut = verify["steps"][names.index("Cut the listing out of the release")]
+            self.assertIn("queue.py listing", cut["run"])
+            self.assertIn("store screenshots", cut["run"])
+            keep = verify["steps"][names.index("Keep the listing for the review and the submission")]
+            self.assertEqual(keep["with"]["name"], "listing-${{ matrix.token }}")
+        publish = WORKFLOWS["submit"]["jobs"]["publish"]
+        downloads = [s["with"]["name"] for s in publish["steps"] if s.get("uses", "").startswith("actions/download-artifact")]
+        self.assertIn("listing-${{ matrix.token }}", downloads)
+        sign = next(s for s in publish["steps"] if s.get("uses") == "./.github/actions/sign-submit")
+        self.assertEqual(sign["with"]["screenshots"], "listing")
 
     def test_the_record_is_written_on_main(self):
         """The merge lands the submission; the record is a commit on top of it."""

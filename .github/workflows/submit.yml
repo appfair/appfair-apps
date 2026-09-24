@@ -42,9 +42,16 @@ jobs:
         with:
           name: build-${{ matrix.token }}-${{ matrix.target }}
           path: packages
+      # The listing's captures, cut out of the release's screenshots.zip by the verify stage:
+      # the same files the review comment showed, so nothing is fetched again here.
+      - uses: actions/download-artifact@v8
+        with:
+          name: listing-${{ matrix.token }}
+          path: listing
       - uses: ./.github/actions/sign-submit
         with:
           token: ${{ matrix.token }}
+          screenshots: listing
           repo: ${{ matrix.repo }}
           ref: ${{ matrix.commit }}
           target: ${{ matrix.target }}
