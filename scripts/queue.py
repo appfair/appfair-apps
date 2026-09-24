@@ -1103,6 +1103,13 @@ def screenshot_problems(app: "App", index: dict, policy_raw: dict, path: str) ->
                 # Each screenshot's size, against what the store takes for that kind.
                 for shot in mine:
                     w, h = shot.get("width") or 0, shot.get("height") or 0
+                    # A capture under the floor is scaled up by `day store stage` where the
+                    # store's rule allows it (`upscale`), by the smallest whole factor that
+                    # clears `min-side`; judge the size the store receives.
+                    if rule.get("upscale") and rule.get("min-side") and 0 < min(w, h) < int(rule["min-side"]):
+                        k = -(-int(rule["min-side"]) // min(w, h))
+                        if not rule.get("max-side") or max(w, h) * k <= int(rule["max-side"]):
+                            w, h = w * k, h * k
                     sizes = rule.get("sizes")
                     if sizes and [w, h] not in [list(x) for x in sizes]:
                         accepted = ", ".join(f"{a}×{b}" for a, b in sizes)
@@ -1117,8 +1124,8 @@ def screenshot_problems(app: "App", index: dict, policy_raw: dict, path: str) ->
                         problems.append(Problem(path, (
                             f"{channel}: the {kind} screenshot {shot.get('shot')!r} ({shot.get('locale')}) is {w}×{h}; "
                             f"the short side has to be at least {rule['min-side']} px. A CI tablet past three million "
-                            f"pixels is captured halved (`medium_tablet` at 1280×800); `Nexus 7 2013` with `density=240` "
-                            f"captures 1920×1200"
+                            f"pixels is captured halved (`medium_tablet` at 1280×800); such a capture is scaled up "
+                            f"to the floor only where the store rules say `upscale: true` for the kind"
                         )))
                     if rule.get("max-side") and hi > int(rule["max-side"]):
                         problems.append(Problem(path, f"{channel}: the {kind} screenshot {shot.get('shot')!r} ({shot.get('locale')}) is {w}×{h}; the long side has to be at most {rule['max-side']} px"))
@@ -2893,9 +2900,14 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
             dict(s, width=1280, height=800) if s["device"] == "tablet" else s for s in listing_index["screenshots"]]}
         ok_tall = not screenshot_problems(app, tall, policy_raw, "x")
         found = [p.message for p in screenshot_problems(app, taller, policy_raw, "x")]
-        found_halved = [p.message for p in screenshot_problems(app, halved, policy_raw, "x")]
-        if ok_tall and any("2.31:1" in m for m in found) and any("1280×800" in m and "Nexus 7 2013" in m for m in found_halved):
-            print("ok   Play's enforced limits: a 20:9 phone passes, a taller one and a halved tablet are named with the fix")
+        # The halved tablet is scaled up where the rules allow it (policy.yaml does), and named
+        # with the fix where they do not.
+        ok_halved = not screenshot_problems(app, halved, policy_raw, "x")
+        strict = json.loads(json.dumps(policy_raw))
+        strict["screenshots"]["google-play-store"]["tablet"]["upscale"] = False
+        found_halved = [p.message for p in screenshot_problems(app, halved, strict, "x")]
+        if ok_tall and ok_halved and any("2.31:1" in m for m in found) and any("1280×800" in m and "upscale" in m for m in found_halved):
+            print("ok   Play's enforced limits: a 20:9 phone passes, a taller one is refused, a halved tablet is scaled up or named with the fix")
         else:
             failures += 1
             print(f"FAIL the Play limits came out wrong: tall ok={ok_tall}, taller={found}, halved={found_halved}")
