@@ -1151,7 +1151,10 @@ def screenshot_problems(app: "App", index: dict, policy_raw: dict, path: str) ->
                             f"{channel} needs {kind} screenshots and the listing declares none for it, or the "
                             f"walkthrough captured none on a {kind} profile. Declare them in store/storefront.toml, "
                             f"`[storefront.{target}.{channel}.screenshots]` with a `{kind}` or `default` list, "
-                            f"and capture on a {kind} profile"
+                            f"and capture on a {kind} profile. (The release's gallery.json is where this reads: "
+                            f"`listings.{target}.stores.{channel}`; a day CLI from before 2026-09-25 wrote that "
+                            f"block only for stores the listing named, so a target-level list alone left it empty — "
+                            f"re-release with a current CLI)"
                         )))
                     elif missing:
                         problems.append(Problem(path, f"{channel}: no {kind} screenshots for {', '.join(missing)}; the walkthrough captured other locales, so run it for these too"))
