@@ -8,10 +8,10 @@
 
 token: Games-Fair
 title: Games Fair
-tag: v2.1.5
+tag: v2.1.9
 # The commit that tag points at. Since a tag can be moved afterwards, this is what every stage
 # checks out. `scripts/queue.py update Games-Fair` rewrites both lines.
-commit: 3eda94beb0795e2798b117d235941690ee219128
+commit: 39a3658e61a7b054621751486597185dfc0428fc
 
 # Where this app goes, keyed by the target that builds for it. policy.yaml lists the channels the
 # queue can publish to. Drop a line to keep the app off a channel.
