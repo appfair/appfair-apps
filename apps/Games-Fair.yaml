@@ -8,7 +8,7 @@
 
 token: Games-Fair
 title: Games Fair
-tag: v2.1.11
+tag: v2.1.12
 # The commit that tag points at. Since a tag can be moved afterwards, this is what every stage
 # checks out. `scripts/queue.py update Games-Fair` rewrites both lines.
 commit: abd18d5bf58f470d5370d995365b0f2d7d05f56b
