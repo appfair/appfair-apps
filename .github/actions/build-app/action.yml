@@ -70,13 +70,13 @@ runs:
         targets: ${{ steps.rust.outputs.targets }}
 
     - name: Set up ${{ inputs.target }} dependencies
-      uses: daybrite/actions/.github/actions/setup-day-deps@main
+      uses: daybrite/actions/.github/actions/setup-day-deps@v1
       with:
         target: ${{ inputs.target }}
         rust: false
         pack: true
 
-    - uses: daybrite/actions/.github/actions/setup-day-cli@main
+    - uses: daybrite/actions/.github/actions/setup-day-cli@v1
       with:
         version: ${{ inputs.day-version }}
 

@@ -112,7 +112,7 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: daybrite/actions/.github/actions/setup-day-cli@main
+    - uses: daybrite/actions/.github/actions/setup-day-cli@v1
       with:
         version: ${{ inputs.day-version }}
 
@@ -248,7 +248,7 @@ runs:
 
     - name: Sign the package
       id: sign
-      uses: daybrite/actions/.github/actions/sign-package@main
+      uses: daybrite/actions/.github/actions/sign-package@v1
       with:
         target: ${{ inputs.target }}
         package: ${{ steps.pick.outputs.package }}
@@ -286,7 +286,7 @@ runs:
         esac
 
     - name: Upload to ${{ inputs.channel }} (${{ inputs.lane }})
-      uses: daybrite/actions/.github/actions/store-upload@main
+      uses: daybrite/actions/.github/actions/store-upload@v1
       with:
         target: ${{ inputs.target }}
         package: ${{ steps.sign.outputs.package }}
