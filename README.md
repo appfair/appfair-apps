@@ -137,10 +137,10 @@ walkthrough's `gallery.json` and `screenshots.zip` (the shared workflow attaches
 app that meets the
 [inclusion criteria](https://appfair.org/docs/inclusion-criteria/). The base release used for the
 comparison comes from the app's own CI, so its existing release workflow is enough and the App
-Fair's own packages never have to be published. The maintainer also grants the catalog's account
-the App Fair app install on their repository, which is how the signed packages reach that
-release, and which is optional: without it they stay a run artifact (CONTRIBUTING.md, "Release
-access"). The queue derives the base artifact name from the
+Fair's own packages never have to be published. The maintainer must install the App Fair Publisher and keep its access to the app repository
+enabled. It attaches signed packages and promotes approved pre-releases. Workflow artifacts
+are retained for recovery, not as an alternative to the required installation (CONTRIBUTING.md,
+"Release access"). The queue derives the base artifact name from the
 unflavored manifest at the pinned commit, including Day's unsigned-IPA suffix. The tag names the
 version being published, so `v2.0.2` publishes 2.0.2 on both stores; a flavor that states a
 `version` of its own is rejected unless the tag agrees with it.
@@ -189,13 +189,14 @@ The short version:
 
 1. If the app is new to the catalog, propose it in a
    [discussion](https://github.com/orgs/appfair/discussions) first.
-2. Tag a release of the app. The tag names the version published, and the build number has to
-   climb past what the stores already have.
+2. Test and commit the app changes, then run `day metadata --version-bump patch --git-push`.
+   Wait for CI to create the pre-release and upload assets. The build number must exceed
+   what the stores already have; check any flavor overrides.
 3. Write the metadata file and open a pull request:
 
    ```sh
-   scripts/queue.py add Faire-Games      # new app, from its latest release
-   scripts/queue.py update Faire-Games   # existing app, moved to its latest release
+   scripts/queue.py add Faire-Games --tag v0.1.1      # use the tag reported by Day
+   scripts/queue.py update Faire-Games --tag v0.1.2   # use the next tag reported by Day
    ```
 
    Each writes `apps/<token>.yaml` and validates it. Read the result before opening the pull

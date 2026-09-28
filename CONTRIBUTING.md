@@ -12,6 +12,17 @@ go straight to a pull request.
 
 ## What the app needs
 
+Follow the [developer inclusion criteria](https://appfair.org/docs/inclusion-criteria/) for
+licensing, dependency, privacy and publication requirements. The primary app license must be
+AGPL-3.0-only with the App Fair Distribution Exception. Included libraries, including transitive
+dependencies, must meet the DFSG and be compatible with that app license. Advertising, analytics
+and bundled closed-source components are prohibited.
+
+After testing and committing app changes, use `day metadata --version-bump patch --git-push`
+to bump the version and build number, commit, tag and push. Wait for CI to create the public
+pre-release and upload its assets. Use the reported tag explicitly when preparing the submission.
+
+
 An app is published under the id its build resolves to, read from its own manifest and from its
 `Day-appfair.toml` when it carries one. Every such id starts with `org.appfair.app.`; what follows
 is the app's own business. `org.appfair.app.<token>` is the convention a new app follows, where
@@ -136,7 +147,7 @@ games-fair-appfair-android-mdc.aab    the bundle Google Play received
 games-fair-appfair-ios-uikit.ipa      the archive App Store Connect received
 ```
 
-It takes write access to the app's repository, which you grant by installing the **App Fair**
+It takes write access to the app's repository, which you grant by installing the **App Fair Publisher**
 GitHub App on it: <https://github.com/apps/app-fair-publisher> → Install → this repository. It asks for
 `Contents: Read and write` and nothing else, it appears in your Settings → GitHub Apps with a
 Revoke button, and it is not a collaborator: it cannot open issues, review pull requests or touch
@@ -156,9 +167,10 @@ Installing it also matters for a staged release: the same access marks your pre-
 latest release once the catalog has published it. Without the install, a pre-release stays one
 and `releases/latest` keeps answering with the version before it.
 
-Granting it is optional. Without it the app is still built, signed and published to the stores;
-the packages are left as the `release-assets-<token>-<tag>` artifact on the publish run, to
-attach by hand. That artifact is written on every run, whether or not the upload followed.
+Installing the App Fair Publisher and keeping its access to the app repository enabled are
+required for first submissions and updates. Restore missing access before publication proceeds.
+Signed packages are also saved as the `release-assets-<token>-<tag>` workflow artifact for
+recovery; that artifact does not replace the installation requirement.
 
 The upload replaces only assets that account uploaded. An asset published by anyone else keeps
 its place, and the run says so and carries on.
