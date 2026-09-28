@@ -2254,7 +2254,9 @@ def select_release(directory: Path, metadata: dict, target: str) -> Path:
     app = identity(metadata, target)
     stem = app.get("artifact") or metadata["project"]["artifact"]
     ext = {"android-mdc": "aab", "ios-uikit": "ipa"}[target]
-    suffixes = ["", "-unsigned"] if target == "ios-uikit" else [""]
+    # `day pack --no-sign` names every package `-unsigned` (the iOS .ipa always did; Android
+    # and HarmonyOS since 2026-09, when the shared workflow moved their signing after the build).
+    suffixes = ["", "-unsigned"]
     names = {f"{prefix}-{target}{suffix}.{ext}"
              for prefix in [stem, f"{stem}-{app['version']}"] for suffix in suffixes}
     matches = [p for p in directory.iterdir() if p.name in names and p.is_file()]
