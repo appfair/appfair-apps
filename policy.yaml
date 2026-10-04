@@ -109,7 +109,7 @@ review:
 # `[storefront.<target>.<store>.screenshots]` (per device kind, or `default`), naming its walkthrough's
 # `screenshot:` steps and the theme to take; `day screenshot index` resolves that into the
 # index's `listings`, and the app's CI attaches the index (gallery.json) and the captures
-# (screenshots.zip) to the release. The review shows exactly those, and the signing stage
+# (screenshots.tar.xz) to the release. The review shows exactly those, and the signing stage
 # places them in the fastlane tree for every locale the store knows.
 #
 # What each store accepts, per device kind the walkthrough captures on: the fallback for a release

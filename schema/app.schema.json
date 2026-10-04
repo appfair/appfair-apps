@@ -70,7 +70,7 @@
     "screenshots": {
       "type": "boolean",
       "default": true,
-      "description": "Whether the submission replaces the stores' screenshots with the walkthrough's marked captures (the release's gallery.json and screenshots.zip). false leaves what each store already shows: the checks skip the marks, the review shows none, and the signing stage stages the listing without them."
+      "description": "Whether the submission replaces the stores' screenshots with the walkthrough's marked captures (the release's gallery.json and screenshots.tar.xz). false leaves what each store already shows: the checks skip the marks, the review shows none, and the signing stage stages the listing without them."
     },
     "distribution": {
       "type": "object",

@@ -896,10 +896,8 @@ def fetch_text(owner_repo: str, ref: str, path: str) -> str | None:
         return None
 
 
-# The site's development channel: what the last deploy built. After a tag build that is the
-# tagged version's captures, the same files the release carries, which is what lets the review
-# link an image rather than point into a zip.
-GALLERY_PATH = "main/gallery/gallery.json"
+# Published screenshot indexes, preferred in release, prerelease, development order.
+GALLERY_PATHS = ("gallery/gallery.json", "prerelease/gallery/gallery.json", "main/gallery/gallery.json")
 # The comment has to stay under GitHub's limit for one comment (65,536 characters), with room
 # for the rest of the review. Past this, later locales fold to a link.
 COMMENT_BUDGET = 56_000
@@ -975,7 +973,7 @@ def gallery_index(app: "App", tag: str) -> tuple[dict | None, str]:
     """The screenshot index the app's release carries, or why there is none.
 
     The captures that go to the stores are the tagged version's own: the app's CI ran its
-    walkthrough on the tag and attached `gallery.json` and `screenshots.zip` to the release, and
+    walkthrough on the tag and attached `gallery.json` and `screenshots.tar.xz` to the release, and
     the signing stage takes them from there. Reading the release rather than the app's website
     means a submission needs no site, and the set cannot drift from the version.
     """
@@ -985,42 +983,67 @@ def gallery_index(app: "App", tag: str) -> tuple[dict | None, str]:
         return None, (
             f"{url} could not be read ({status or 'no answer'}). An App Fair submission takes the "
             f"listing's screenshots from the release: the shared Day workflow attaches "
-            f"gallery.json and screenshots.zip to every release whose dayscripts captured "
+            f"gallery.json and screenshots.tar.xz to every release whose dayscripts captured "
             f"screenshots (https://daybrite.dev/docs/ci)"
         )
     return body, url
 
 
 def site_gallery(app: "App", commit: str) -> dict | None:
-    """The app's site's own index of its latest build, when the site is published.
+    """Published website captures across release, prerelease and development channels.
 
-    Only the review comment reads it, to link an image the reviewer can open: a release's
-    captures live in its screenshots.zip, and the site's development channel serves the same
-    files after the tag build deploys it.
+    These URLs supply review previews. The release artifact remains the source of the
+    submitted files, since website builds and PNG optimization can change their bytes.
     """
     host = site_host(app.owner_repo, commit)
     if not host:
         return None
-    status, body = fetch_json(f"{host}/{GALLERY_PATH}")
-    if status != 200 or not isinstance(body, dict) or not isinstance(body.get("screenshots"), list):
-        return None
-    return body
+    shots = []
+    for path in GALLERY_PATHS:
+        status, body = fetch_json(f"{host}/{path}")
+        if status == 200 and isinstance(body, dict) and isinstance(body.get("screenshots"), list):
+            shots.extend(body["screenshots"])
+    return {"site": host, "screenshots": shots} if shots else None
+
+
+def capture_path(path: object) -> str:
+    """A capture's channel-independent gallery path, retaining device and variant levels."""
+    path = str(path or "")
+    for prefix in ("main/gallery/", "prerelease/gallery/"):
+        if path.startswith(prefix):
+            return "gallery/" + path.removeprefix(prefix)
+    return path
 
 
 def viewable(index: dict, site: dict | None) -> dict:
-    """The index with each capture's `url` pointing at the site's copy of that very file, by
-    sha-256, and no `url` at all where the site has none or a different one."""
-    served = {
-        (str(e.get("path")), str(e.get("sha256"))): str(e.get("url"))
-        for e in (site or {}).get("screenshots") or []
-        if isinstance(e, dict) and e.get("url")
-    }
+    """Attach website preview URLs by capture path across channels, without checking PNG hashes.
+
+    The submitted files remain in the listing artifact. No image URL is invented for a
+    capture absent from the site's published indexes.
+    """
+    from urllib.parse import urlsplit
+
+    served: dict[str, dict] = {}
+    for e in (site or {}).get("screenshots") or []:
+        if not isinstance(e, dict) or not e.get("path") or not e.get("url"):
+            continue
+        try:
+            parsed = urlsplit(str(e["url"]))
+        except ValueError:
+            continue
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            continue
+        served.setdefault(capture_path(e["path"]), e)
     shots = []
     for e in index.get("screenshots") or []:
         if not isinstance(e, dict):
             continue
-        url = served.get((str(e.get("path")), str(e.get("sha256"))))
-        shots.append({**e, "url": url} if url else {k: v for k, v in e.items() if k != "url"})
+        shot = {k: v for k, v in e.items() if k not in ("url", "website_preview")}
+        match = served.get(capture_path(e.get("path")))
+        if match:
+            shot["url"] = str(match["url"])
+            shot["website_preview"] = True
+        shots.append(shot)
     return {**index, "screenshots": shots}
 
 
@@ -1162,14 +1185,13 @@ def screenshot_problems(app: "App", index: dict, policy_raw: dict, path: str) ->
 
 
 def cmd_listing(args: argparse.Namespace) -> int:
-    """Extract the listing's captures from a release's screenshots.zip into a capture tree.
+    """Select listing captures from a tree verified by `day screenshot unpack`.
 
-    The tree is what the later stages use: `day store stage --screenshots <out>/gallery.json`
-    places from it, and the review's artifact holds it, so the stores receive exactly what the
-    reviewer was shown. Each file is checked against the index's sha-256 as it is written.
+    Unpack restores compact PNGs and updates gallery.json to describe the files written.
+    Select the listing without repeating the unpacker's integrity checks, so the review
+    artifact holds the files the stores receive.
     """
-    import hashlib
-    import zipfile
+    from pathlib import PurePosixPath
 
     index = json.loads(Path(args.gallery).read_text())
     channels = list(Policy.load().channels)
@@ -1182,30 +1204,30 @@ def cmd_listing(args: argparse.Namespace) -> int:
                 chosen.append(shot)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
+    captures = Path(args.captures).resolve()
     problems: list[str] = []
     written = 0
-    with zipfile.ZipFile(args.zip) as archive:
-        members = set(archive.namelist())
-        for shot in chosen:
-            member = str(shot.get("path") or "").removeprefix("gallery/")
-            if not member or member not in members:
-                problems.append(f"{shot.get('path')} is in gallery.json and not in {args.zip}")
-                continue
-            data = archive.read(member)
-            digest = hashlib.sha256(data).hexdigest()
-            if shot.get("sha256") and digest != shot.get("sha256"):
-                problems.append(f"{member} in {args.zip} is not the file gallery.json describes (sha-256 differs)")
-                continue
-            target = out / member
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(data)
-            written += 1
+    for shot in chosen:
+        member = str(shot.get("path") or "").removeprefix("gallery/")
+        path = PurePosixPath(member)
+        source = captures / member
+        if not member or path.is_absolute() or ".." in path.parts or not source.resolve().is_relative_to(captures):
+            problems.append(f"{shot.get('path')} is not a safe capture path")
+            continue
+        if not source.is_file():
+            problems.append(f"{shot.get('path')} is in gallery.json and not in {args.captures}")
+            continue
+        data = source.read_bytes()
+        target = out / member
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+        written += 1
     (out / "gallery.json").write_text(json.dumps(index))
     for problem in problems:
         Problem("listing", problem).emit()
     if problems:
         return 1
-    print(f"{written} listing capture(s) from {args.zip} → {out}")
+    print(f"{written} listing capture(s) from {args.captures} → {out}")
     return 0
 
 
@@ -1264,18 +1286,24 @@ def screenshot_section(index: dict, url: str, budget: int = COMMENT_BUDGET, arti
         )
 
     def inline(key, shots):
-        # A capture the site does not serve is named rather than shown: it is in the release's
-        # screenshots.zip, which is what the store receives.
-        images = " ".join(
-            f'<img src="{s["url"]}" width="120" alt="{s.get("title") or s.get("shot") or ""}">'
-            if s.get("url") else f"<code>{s.get('shot') or s.get('file') or ''}</code>"
-            for s in shots
-        )
+        from html import escape
+
+        def image(shot):
+            title = escape(str(shot.get("title") or shot.get("shot") or ""), quote=True)
+            if not shot.get("url"):
+                return f"<code>{title}</code>"
+            link = escape(str(shot["url"]), quote=True)
+            label = "Website preview; may differ from the submitted release"
+            return f'<a href="{link}"><img src="{link}" width="120" alt="{title}" title="{label}"></a>'
+
+        images = " ".join(image(s) for s in shots)
         return f"<details><summary>{summary(key, len(shots))}</summary>\n\n<p>{images}</p>\n</details>"
 
     def folded(key, shots):
         locale = key[2]
-        page = f"{site}/{locale}/main/gallery/" if locale else f"{site}/main/gallery/"
+        image_url = next((str(s["url"]) for s in shots if s.get("url")), "")
+        channel = "prerelease/" if "/prerelease/gallery/" in image_url else "main/" if "/main/gallery/" in image_url else ""
+        page = f"{site}/{locale}/{channel}gallery/" if locale else f"{site}/{channel}gallery/"
         return (
             f"<details><summary>{summary(key, len(shots))}</summary>\n\n"
             f"Not inlined, to keep this comment under GitHub's size limit: [open the gallery]({page}).\n"
@@ -1284,17 +1312,24 @@ def screenshot_section(index: dict, url: str, budget: int = COMMENT_BUDGET, arti
 
     generated = str(index.get("generated") or "")[:10]
     unseen = sum(1 for s in listing if not s.get("url"))
+    previews = sum(1 for s in listing if s.get("website_preview"))
     head = (
         f"The listing's screenshots, from the release's [gallery.json]({url})"
         + (f", generated {generated}" if generated else "")
         + ", in listing order"
         + (
-            f" ({unseen} of them named rather than shown: the site's latest build does not serve "
-            f"that file, so it is in the release's screenshots.zip)"
+            f" ({unseen} named rather than shown: no website preview is available; "
+            f"the submitted files are in the release's screenshots.tar.xz)"
             if unseen else ""
         )
         + ":"
     )
+    if previews:
+        source = "the listing artifact below" if artifact else "the release's screenshots.tar.xz"
+        head += (
+            f"\n\n{previews} image(s) are website previews and may differ from the submitted release. "
+            f"Review {source} for the submitted files."
+        )
     if artifact:
         name, link = artifact
         head += (
@@ -2950,7 +2985,7 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
         if (heads[:2] == ["App Store listing (iPhone, English) · 1", "App Store listing (iPhone, French) · 1"]
                 and "smoke.png" not in section and "/dark/" not in section
                 and "release's [gallery.json](https://example.test/App/releases/download/v1/gallery.json)" in section
-                and "3 of them named rather than shown" in section and "<code>home</code>" in section):
+                and "3 named rather than shown" in section and "<code>home</code>" in section):
             print("ok   the review shows the listing's screenshots and nothing else")
         else:
             failures += 1
@@ -2959,33 +2994,32 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
     # A release without the index: the message says what attaches it.
     nowhere = App(path=Path("apps/Nowhere.yaml"), data={"token": "Nowhere", "repo": "example/nowhere"})
     missing, why = gallery_index(nowhere, "v0.0.0")
-    if missing is None and "releases/download/v0.0.0/gallery.json" in why and "screenshots.zip" in why:
+    if missing is None and "releases/download/v0.0.0/gallery.json" in why and "screenshots.tar.xz" in why:
         print("ok   a release without gallery.json is told what the review needs")
     else:
         failures += 1
         print(f"FAIL the missing-index message was: {why}")
 
-    # The comment links a capture only where the site serves that very file.
+    # Synthetic website previews retain capture identity across channel prefixes.
     release = {"screenshots": [
         {"path": "gallery/ios-uikit/iphone/light/home.png", "sha256": "aa", "url": "https://example.test/App/gallery/x/home.png", "shot": "home"},
         {"path": "gallery/ios-uikit/iphone/light/play.png", "sha256": "bb", "url": "https://example.test/App/gallery/x/play.png", "shot": "play"},
         {"path": "gallery/ios-uikit/iphone/light/old.png", "sha256": "cc", "shot": "old"},
     ]}
     site = {"screenshots": [
-        {"path": "gallery/ios-uikit/iphone/light/home.png", "sha256": "aa", "url": "https://example.test/App/main/gallery/x/home.png"},
-        {"path": "gallery/ios-uikit/iphone/light/play.png", "sha256": "b2", "url": "https://example.test/App/main/gallery/x/play.png"},
+        {"path": "main/gallery/ios-uikit/iphone/light/home.png", "sha256": "aa", "url": "https://example.test/App/main/gallery/x/home.png"},
+        {"path": "main/gallery/ios-uikit/iphone/light/play.png", "sha256": "b2", "url": "https://example.test/App/main/gallery/x/play.png"},
     ]}
     seen = [s.get("url") for s in viewable(release, site)["screenshots"]]
-    if seen == ["https://example.test/App/main/gallery/x/home.png", None, None] and [s.get("url") for s in viewable(release, None)["screenshots"]] == [None, None, None]:
-        print("ok   the review links the site's copy of a capture only when it is the release's file")
+    if seen == ["https://example.test/App/main/gallery/x/home.png", "https://example.test/App/main/gallery/x/play.png", None] and [s.get("url") for s in viewable(release, None)["screenshots"]] == [None, None, None]:
+        print("ok   the review resolves channel paths and links available website previews")
     else:
         failures += 1
         print(f"FAIL the viewable urls came out as {seen}")
 
-    # The listing is cut out of the release's zip, file by file against the index's sha-256.
+    # Synthetic unpacked capture fixtures; PNG checksum validation belongs to the unpacker.
     import hashlib
     import tempfile
-    import zipfile
     with tempfile.TemporaryDirectory() as temp:
         temp_path = Path(temp)
         good = b"home-png"
@@ -2998,30 +3032,37 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
              "path": "gallery/ios-uikit/iphone/light/smoke.png", "sha256": "ignored"},
         ]
         (temp_path / "gallery.json").write_text(json.dumps(with_listings({"screenshots": entries})))
-        with zipfile.ZipFile(temp_path / "screenshots.zip", "w") as archive:
-            archive.writestr("ios-uikit/iphone/light/home.png", good)
-            archive.writestr("ios-uikit/iphone/dark/home.png", b"dark")
-            archive.writestr("ios-uikit/iphone/light/smoke.png", b"smoke")
+        captures = temp_path / "unpacked"
+        for member, data in [("ios-uikit/iphone/light/home.png", good),
+                             ("ios-uikit/iphone/dark/home.png", b"dark"),
+                             ("ios-uikit/iphone/light/smoke.png", b"smoke")]:
+            target = captures / member
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
         out = temp_path / "listing"
-        args = argparse.Namespace(gallery=str(temp_path / "gallery.json"), zip=str(temp_path / "screenshots.zip"), out=str(out))
+        args = argparse.Namespace(gallery=str(temp_path / "gallery.json"), captures=str(captures), out=str(out))
         code = cmd_listing(args)
         files = sorted(str(f.relative_to(out)) for f in out.rglob("*") if f.is_file())
         if code == 0 and files == ["gallery.json", "ios-uikit/iphone/light/home.png"] and (out / "ios-uikit/iphone/light/home.png").read_bytes() == good:
-            print("ok   the listing is cut out of the release's zip: the marked light captures and the index")
+            print("ok   the listing is selected from the unpacked bundle: the marked light captures and the index")
         else:
             failures += 1
             print(f"FAIL the listing extraction wrote {files} (exit {code})")
-        with zipfile.ZipFile(temp_path / "screenshots.zip", "w") as archive:
-            archive.writestr("ios-uikit/iphone/light/home.png", b"not the same bytes")
-        was = os.environ.pop("GITHUB_ACTIONS", None)
-        code = cmd_listing(args)
-        if was is not None:
-            os.environ["GITHUB_ACTIONS"] = was
-        if code == 1:
-            print("ok   a capture that is not the file the index describes is refused")
-        else:
+        (captures / "ios-uikit/iphone/light/home.png").write_bytes(b"different encoding")
+        if cmd_listing(args) != 0:
             failures += 1
-            print("FAIL a zip that does not match its index was accepted")
+            print("FAIL the catalog repeated PNG checksum validation")
+        for unsafe in ("gallery/../outside.png", "/outside.png"):
+            unsafe_index = with_listings({"screenshots": [dict(entries[0], path=unsafe)]})
+            Path(args.gallery).write_text(json.dumps(unsafe_index))
+            if cmd_listing(args) != 1:
+                failures += 1
+                print(f"FAIL an unsafe capture path was accepted: {unsafe}")
+        Path(args.gallery).write_text(json.dumps(with_listings({"screenshots": entries})))
+        (captures / "ios-uikit/iphone/light/home.png").unlink()
+        if cmd_listing(args) != 1:
+            failures += 1
+            print("FAIL a missing listing capture was accepted")
     # The comment names the run's artifact, which holds every capture the stores receive.
     with_artifact = screenshot_section(listing_index, "https://example.test/x/gallery.json", artifact=("listing-App", "https://github.com/x/actions/runs/1/artifacts/2"))
     if "[`listing-App`](https://github.com/x/actions/runs/1/artifacts/2)" in with_artifact:
@@ -3132,9 +3173,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--artifacts", help="a JSON file mapping each token to its listing artifact's URL")
     p.set_defaults(func=cmd_review)
 
-    p = sub.add_parser("listing", help="extract the listing's captures from a release's screenshots.zip")
-    p.add_argument("--gallery", required=True, help="the release's gallery.json")
-    p.add_argument("--zip", required=True, help="the release's screenshots.zip")
+    p = sub.add_parser("listing", help="select the listing's captures from a verified screenshot tree")
+    p.add_argument("--gallery", required=True, help="the gallery.json written by day screenshot unpack")
+    p.add_argument("--captures", required=True, help="the tree written by day screenshot unpack")
     p.add_argument("--out", required=True, help="the capture tree to write, with gallery.json at its root")
     p.set_defaults(func=cmd_listing)
 

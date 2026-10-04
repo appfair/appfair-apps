@@ -187,9 +187,9 @@ jobs:
             (cd app-data && "$DAY_BIN" metadata --json) > metadata.json
           fi
           cat metadata.json
-      # The release the tag names carries the walkthrough's captures (screenshots.zip) and their
+      # The release the tag names carries the walkthrough's captures (screenshots.tar.xz) and their
       # index (gallery.json); the shared Day workflow attaches both. They are fetched once, here:
-      # the verify below reads the index, the listing's captures are cut out of the zip and kept
+      # the verify below reads the index, the listing's captures are cut out of the unpacked bundle and kept
       # as this run's artifact, and the review and the store submission both take that artifact,
       # so the reviewer approves the files the store receives.
       - name: Fetch the release's screenshots
@@ -200,9 +200,9 @@ jobs:
           set -euo pipefail
           mkdir -p release-shots
           curl -fsSL --retry 3 -o release-shots/gallery.json "$RELEASE/gallery.json" \
-            || { echo "::error file=apps/${{ matrix.token }}.yaml::$RELEASE/gallery.json could not be downloaded. An App Fair submission takes the listing's screenshots from the release; the shared Day workflow attaches gallery.json and screenshots.zip to every release whose dayscripts captured screenshots"; exit 1; }
-          curl -fsSL --retry 3 -o release-shots/screenshots.zip "$RELEASE/screenshots.zip" \
-            || { echo "::error file=apps/${{ matrix.token }}.yaml::$RELEASE/screenshots.zip could not be downloaded; the release carries its index and not its captures"; exit 1; }
+            || { echo "::error file=apps/${{ matrix.token }}.yaml::$RELEASE/gallery.json could not be downloaded. An App Fair submission takes the listing's screenshots from the release; the shared Day workflow attaches gallery.json and screenshots.tar.xz to every release whose dayscripts captured screenshots"; exit 1; }
+          curl -fsSL --retry 3 -o release-shots/screenshots.tar.xz "$RELEASE/screenshots.tar.xz" \
+            || { echo "::error file=apps/${{ matrix.token }}.yaml::$RELEASE/screenshots.tar.xz could not be downloaded; the release carries its index and not its captures"; exit 1; }
       - name: Verify the submission
         run: |
           set -euo pipefail
@@ -218,8 +218,9 @@ jobs:
         if: ${{ matrix.screenshots }}
         run: |
           set -euo pipefail
-          python3 scripts/queue.py listing --gallery release-shots/gallery.json \
-            --zip release-shots/screenshots.zip --out listing
+          "$DAY_BIN" screenshot unpack release-shots/screenshots.tar.xz --out release-shots/unpacked
+          python3 scripts/queue.py listing --gallery release-shots/unpacked/gallery.json \
+            --captures release-shots/unpacked --out listing
           "$DAY_BIN" --project app-data ${{ matrix.flavor != '' && format('--flavor {0}', matrix.flavor) || '' }} \
             store screenshots "$PWD/listing/gallery.json"
       - name: Keep the listing for the review and the submission

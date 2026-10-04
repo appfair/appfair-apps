@@ -42,7 +42,7 @@ jobs:
         with:
           name: build-${{ matrix.token }}-${{ matrix.target }}
           path: packages
-      # The listing's captures, cut out of the release's screenshots.zip by the verify stage:
+      # The listing's captures, cut out of the release's screenshots.tar.xz by the verify stage:
       # the same files the review comment showed, so nothing is fetched again here.
       - if: ${{ matrix.screenshots }}
         uses: actions/download-artifact@v8

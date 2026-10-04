@@ -90,18 +90,21 @@ class FlowTests(unittest.TestCase):
         self.assertIn("head_repository.full_name != github.repository", " ".join(fork["if"].split()))
 
     def test_the_listing_is_cut_out_once_and_reused(self):
-        """Verify fetches the release's screenshots.zip and keeps the listing as an artifact;
+        """Verify fetches the release's screenshots.tar.xz and keeps the listing as an artifact;
         the review shows it and the submission stages from it, so nothing is fetched twice and
         the store receives the files the reviewer saw."""
         for name in ("pr", "publish"):
             verify = WORKFLOWS[name]["jobs"]["verify"]
             names = [step.get("name") for step in verify["steps"]]
             fetch = verify["steps"][names.index("Fetch the release's screenshots")]
-            self.assertIn("screenshots.zip", fetch["run"])
+            self.assertIn("screenshots.tar.xz", fetch["run"])
             self.assertIn("--gallery release-shots/gallery.json",
                           verify["steps"][names.index("Verify the submission")]["run"])
             cut = verify["steps"][names.index("Cut the listing out of the release")]
-            self.assertIn("queue.py listing", cut["run"])
+            self.assertIn('"$DAY_BIN" screenshot unpack release-shots/screenshots.tar.xz --out release-shots/unpacked', cut["run"])
+            self.assertIn("--gallery release-shots/unpacked/gallery.json", cut["run"])
+            self.assertIn("--captures release-shots/unpacked --out listing", cut["run"])
+            self.assertLess(cut["run"].index("screenshot unpack"), cut["run"].index("queue.py listing"))
             self.assertIn("store screenshots", cut["run"])
             keep = verify["steps"][names.index("Keep the listing for the review and the submission")]
             self.assertEqual(keep["with"]["name"], "listing-${{ matrix.token }}")
@@ -192,6 +195,69 @@ class RecordTests(unittest.TestCase):
         token = next(app.token for app in catalog.catalog())
         self.assertEqual(self.record(app=token, tag="v1.0.0", channels="google-play-store"), 0)
         self.assertEqual(json.loads(self.state.read_text())["apps"][token]["tag"], "v1.0.0")
+
+
+class ScreenshotPreviewTests(unittest.TestCase):
+    def shot(self, prefix="", digest="release", **extra):
+        # Synthetic index entries, not bundled app resources.
+        path = prefix + "gallery/ios-uikit/iphone/light/home.png"
+        return {"path": path, "sha256": digest, "url": "https://example.test/" + path,
+                "platform": "ios-uikit", "device": "iphone", "locale": "en", "theme": "light",
+                "shot": "home", "title": 'Home " & <play>', **extra}
+
+    def index(self, shots):
+        return {"screenshots": shots, "listings": {"ios-uikit": {"stores": {
+            "apple-app-store": {"iphone": {"en": [{"shot": "home", "theme": "light"}]}}
+        }}}}
+
+    def test_channel_paths_prefer_the_release_channel_without_checking_hashes(self):
+        release = self.index([self.shot()])
+        site = self.index([self.shot(digest="new-build"), self.shot("main/")])
+        shown = catalog.viewable(release, site)["screenshots"][0]
+        self.assertEqual(shown["url"], "https://example.test/gallery/ios-uikit/iphone/light/home.png")
+        self.assertTrue(shown["website_preview"])
+        self.assertNotIn("website_preview", release["screenshots"][0])
+
+    def test_changed_bytes_render_a_labeled_linked_preview(self):
+        shown = catalog.viewable(self.index([self.shot()]), self.index([self.shot("main/", "optimized")]))
+        section = catalog.screenshot_section(shown, "https://example.test/gallery.json",
+                                            artifact=("listing-App", "https://example.test/artifact"))
+        self.assertIn('<a href="https://example.test/main/gallery/', section)
+        self.assertIn('<img src="https://example.test/main/gallery/', section)
+        self.assertIn('title="Website preview; may differ from the submitted release"', section)
+        self.assertIn("1 image(s) are website previews", section)
+        self.assertIn("Review the listing artifact below", section)
+        self.assertIn("Home &quot; &amp; &lt;play&gt;", section)
+
+    def test_missing_and_other_device_captures_are_not_substituted(self):
+        other = self.shot("main/")
+        other["path"] = other["path"].replace("iphone", "ipad")
+        for site in (None, self.index([other])):
+            shown = catalog.viewable(self.index([self.shot()]), site)
+            self.assertNotIn("url", shown["screenshots"][0])
+            self.assertIn("<code>Home &quot; &amp; &lt;play&gt;</code>",
+                          catalog.screenshot_section(shown, "https://example.test/gallery.json"))
+
+    def test_no_checksums_cannot_claim_an_exact_capture(self):
+        shown = catalog.viewable(self.index([self.shot(digest=None)]),
+                                 self.index([self.shot("prerelease/", None)]))
+        self.assertTrue(shown["screenshots"][0]["website_preview"])
+
+    def test_site_gallery_reads_all_channels_even_when_release_is_missing(self):
+        from unittest.mock import patch
+        app = catalog.catalog()[0]
+        with patch.object(catalog, "site_host", return_value="https://example.test"), \
+                patch.object(catalog, "fetch_json", side_effect=[(404, None), (200, self.index([self.shot("prerelease/")])),
+                                                               (200, self.index([self.shot("main/")]))]) as fetch:
+            site = catalog.site_gallery(app, "fixture-commit")
+        self.assertEqual(len(site["screenshots"]), 2)
+        self.assertEqual([c.args[0] for c in fetch.call_args_list],
+                         ["https://example.test/" + p for p in catalog.GALLERY_PATHS])
+
+    def test_invalid_image_urls_are_not_embedded(self):
+        for url in ('javascript:alert(1)', 'https://[invalid'):
+            site = self.index([self.shot(url=url)])
+            self.assertNotIn("url", catalog.viewable(self.index([self.shot()]), site)["screenshots"][0])
 
 
 if __name__ == "__main__":

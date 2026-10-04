@@ -96,13 +96,14 @@ default = ["home", "puzzle"]            # every device kind: phone and tablet al
 ```
 
 Each list applies to every locale the walkthrough captured. The app's CI attaches
-the captures to the release as `screenshots.zip`, with their positions in `gallery.json` beside
+the captures to the release as `screenshots.tar.xz`, with their positions in `gallery.json` beside
 it. The verify stage fetches both once, holds the marked captures to the stores' rules, cuts
-them out of the zip (`queue.py listing`, each file checked against the index's sha-256) and
+them out of the verified tree (`day screenshot unpack`, then `queue.py listing`) and
 keeps them as the run's `listing-<token>` artifact; the review comment shows that set and links
 the artifact, and the signing stage places the same files in the fastlane tree for every locale
 the store knows, without fetching anything again. Nothing is read from the app's website
-except, for the review, a link to its copy of each image. The catalog takes the light theme
+except, for the review, published screenshot previews. Website previews
+are labeled as potentially different from the submitted files; the listing artifact is authoritative. The catalog takes the light theme
 (`policy.yaml`, `screenshots.theme`).
 
 What the checks require, per channel the submission names:
@@ -297,9 +298,10 @@ eighth waits for an App Fair maintainer.
    excludes the source. `day metadata --json` must report the version the tag names and the
    targets the file asks for, the tag must still point at the pinned commit, and the id it builds
    has to match an `id` pin when the file states one. The release the tag names has to carry
-   `gallery.json` and `screenshots.zip`, the screenshot index and captures the shared Day
+   `gallery.json` and `screenshots.tar.xz`, the screenshot index and captures the shared Day
    workflow attaches; the listing's screenshots are checked against each store's sizes (see
-   below), cut out of the zip file by file against the index's sha-256, and kept as this run's
+   below), unpacked with `day screenshot unpack` (which verifies `SHA256SUMS` and restores
+   compact PNGs with an updated index), selected for the listing without further PNG checksum validation, and kept as this run's
    `listing-<token>` artifact for the two stages that follow.
 5. **The reviewer's comment**: for an update, the range between the commit already published and
    the one this pull request proposes, with the number of commits and files, the build and
@@ -307,9 +309,11 @@ eighth waits for an App Fair maintainer.
    the source at its commit. Below that, the listing's screenshots from the `listing-<token>`
    artifact the previous step kept, one folded block per store, device and language, in listing
    order, with a link to that artifact, which holds every file the stores will receive. A
-   comment can only show an image by address, so each one links to the app's site where its
-   latest build serves that same file (by sha-256), and a capture the site does not serve is
-   named instead; the artifact is the authority either way. When the whole set would not fit in
+   comment can only show an image by address, so it looks in the app site's release, prerelease
+   and development gallery indexes, matching paths across channel prefixes without validating
+   PNG checksums. Images are labeled as website previews that may differ from the submitted
+   release. A capture absent
+   from all published indexes is named instead; the artifact is the authority either way. When the whole set would not fit in
    one comment, other languages keep their block and link to the gallery page instead. The
    comment is posted once every submission is verified, before the approval, and rewritten on
    every push.
