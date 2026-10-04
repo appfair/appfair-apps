@@ -2893,7 +2893,7 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
         failures += 1
         print(f"FAIL the screenshot groups came out as {headings}")
     tight = screenshot_section(index, "https://example.test/App/gallery/gallery.json", budget=400)
-    if tight.count("Not inlined") >= 1 and "[open the gallery](https://example.test/App/fr/main/gallery/)" in tight and headings[0] in tight:
+    if tight.count("Not inlined") >= 1 and "[open the gallery](https://example.test/App/fr/gallery/)" in tight and headings[0] in tight:
         print("ok   past the comment's size budget, other languages fold to a link and keep their heading")
     else:
         failures += 1

@@ -254,6 +254,16 @@ class ScreenshotPreviewTests(unittest.TestCase):
         self.assertEqual([c.args[0] for c in fetch.call_args_list],
                          ["https://example.test/" + p for p in catalog.GALLERY_PATHS])
 
+    def test_folded_links_follow_the_published_gallery_channel(self):
+        for channel in ("", "main/", "prerelease/"):
+            with self.subTest(channel=channel):
+                index = self.index([self.shot(channel)])
+                index["site"] = "https://example.test"
+                section = catalog.screenshot_section(index, "https://example.test/gallery.json", budget=1)
+                self.assertIn(f"[open the gallery](https://example.test/en/{channel}gallery/)", section)
+                self.assertIn("App Store listing (iPhone, English)", section)
+                self.assertNotIn("<img ", section)
+
     def test_invalid_image_urls_are_not_embedded(self):
         for url in ('javascript:alert(1)', 'https://[invalid'):
             site = self.index([self.shot(url=url)])
