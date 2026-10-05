@@ -18,12 +18,12 @@
         "google-play-store"
       ],
       "id": "org.appfair.app.Games-Fair",
-      "published": "2026-10-01T18:58:58Z",
+      "published": "2026-10-05T02:31:32Z",
       "repo": "https://github.com/Games-Fair/Games-Fair",
-      "run": "https://github.com/appfair/appfair-apps/actions/runs/36900519602",
-      "tag": "v2.2.6",
+      "run": "https://github.com/appfair/appfair-apps/actions/runs/37253603910",
+      "tag": "v2.2.8",
       "title": "Games Fair"
     }
   },
-  "updated": "2026-10-01T18:58:58Z"
+  "updated": "2026-10-05T02:31:32Z"
 }
