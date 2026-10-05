@@ -75,6 +75,7 @@ runs:
         target: ${{ inputs.target }}
         rust: false
         pack: true
+        java: true
 
     - uses: daybrite/actions/.github/actions/setup-day-cli@v1
       with:
