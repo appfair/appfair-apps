@@ -27,6 +27,31 @@ WORKFLOWS = {
 }
 
 
+ACTIONS = {
+    path.parent.name: yaml.safe_load(path.read_text())
+    for path in sorted((ROOT / ".github/actions").glob("*/action.yml"))
+}
+
+
+def day_commands() -> list[tuple[str, str]]:
+    """Every `"$DAY_BIN" …` command the workflows and the actions run, with where it is, each
+    joined across its line continuations."""
+    scripts = []
+    for name, workflow in WORKFLOWS.items():
+        for job, body in (workflow.get("jobs") or {}).items():
+            for step in body.get("steps") or []:
+                scripts.append((f"{name}.yml {job}", step.get("run") or ""))
+    for name, action in ACTIONS.items():
+        for step in (action.get("runs") or {}).get("steps") or []:
+            scripts.append((f"{name}/action.yml", step.get("run") or ""))
+    commands = []
+    for where, script in scripts:
+        for line in script.replace("\\\n", " ").splitlines():
+            if '"$DAY_BIN"' in line and not line.lstrip().startswith("#"):
+                commands.append((where, " ".join(line.split())))
+    return commands
+
+
 def triggers(workflow: dict) -> dict:
     """`on:` parses as the boolean True, which is YAML 1.1 for the bare word "on"."""
     return workflow.get("on", workflow.get(True)) or {}
@@ -151,6 +176,28 @@ class FlowTests(unittest.TestCase):
                 uses_key = "APPFAIR_APP_PRIVATE_KEY" in yaml.safe_dump(spec)
                 if uses_key:
                     self.assertEqual(spec.get("environment"), "store", f"{name}:{job}")
+
+
+class DayCliTests(unittest.TestCase):
+    """The catalog builds with the tip of Day's CLI, so a flag Day removes breaks every
+    submission at once. These pin the spellings the CLI takes now."""
+
+    def test_the_build_names_its_target_with_the_flag_day_takes(self):
+        packs = [(where, cmd) for where, cmd in day_commands() if " pack " in cmd]
+        self.assertTrue(packs, "no `day pack` command found: has the build moved?")
+        for where, cmd in packs:
+            self.assertIn('--target "${{ inputs.target }}"', cmd, where)
+
+    def test_no_command_passes_day_a_flag_it_removed(self):
+        # `-p` and `--platform` were aliases of `--target` until Day dropped them (2026-10-12);
+        # a command that still passes one stops with "unexpected argument" before it does anything.
+        for where, cmd in day_commands():
+            words = cmd.split()
+            for removed in ("-p", "--platform"):
+                self.assertFalse(
+                    any(w == removed or w.startswith(removed + "=") for w in words),
+                    f"{where}: `{removed}` in: {cmd}",
+                )
 
 
 class RecordTests(unittest.TestCase):

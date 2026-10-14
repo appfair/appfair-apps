@@ -102,7 +102,7 @@ runs:
         set -euo pipefail
         # Unsigned: the signing happens in stage C, which holds the keys and runs no app code.
         "$DAY_BIN" $FLAVOR_ARGS pack \
-          -p "${{ inputs.target }}" --no-sign --no-version-in-name --format json | tee "$RUNNER_TEMP/pack-${{ inputs.target }}.json"
+          --target "${{ inputs.target }}" --no-sign --no-version-in-name --format json | tee "$RUNNER_TEMP/pack-${{ inputs.target }}.json"
 
     - name: Collect the packages
       shell: bash
