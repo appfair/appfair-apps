@@ -23,7 +23,19 @@
       "run": "https://github.com/appfair/appfair-apps/actions/runs/38489075662",
       "tag": "v2.3.0",
       "title": "Games Fair"
+    },
+    "Stanza-Redux": {
+      "channels": [
+        "apple-app-store",
+        "google-play-store"
+      ],
+      "id": "org.appfair.app.Stanza-Redux",
+      "published": "2026-10-14T13:04:26Z",
+      "repo": "https://github.com/Stanza-Redux/Stanza-Redux",
+      "run": "https://github.com/appfair/appfair-apps/actions/runs/38564894751",
+      "tag": "v2.0.5",
+      "title": "Stanza Redux"
     }
   },
-  "updated": "2026-10-14T01:07:47Z"
+  "updated": "2026-10-14T13:04:26Z"
 }
