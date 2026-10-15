@@ -20,22 +20,9 @@ import os
 import re
 import sys
 import tomllib
-import urllib.error
-import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable
-
-HERE = Path(__file__).resolve().parent
-REFERENCE = HERE / "reference"
-
-# Where the licence texts come from: the App Fair app template, which is what an app is
-# scaffolded from and therefore the text an app is measured against. `reference/` holds a copy
-# for a run that cannot reach it; `--check-template` fails this repository's own checks when the
-# two drift apart.
-DEFAULT_TEMPLATE = "appfair/day-appfair@main"
-TEMPLATE = os.environ.get("APPFAIR_TEMPLATE", DEFAULT_TEMPLATE)
-TEMPLATE_TIMEOUT = 20
 
 # Build output and dependency trees, which no walk descends into. A rule that needs one of these
 # asks for it by path.
@@ -66,93 +53,19 @@ PLATFORM_KEYS = {
     "apple": ["ios", "macos", "ios-uikit", "macos-appkit", "macos-gtk", "macos-qt"],
 }
 
-# The licence every app here ships under, and the line that says so in a source file.
-SPDX = "AGPL-3.0-only WITH App-Fair-Distribution-Exception"
-SPDX_LINE = f"// SPDX-License-Identifier: {SPDX}"
+# Source notices name the applicable license, not a catalog-wide license. This is a presence
+# check, not an SPDX expression parser or a determination of DFSG compliance.
+SPDX_NOTICE = re.compile(r"^\s*//\s*SPDX-License-Identifier:\s*(\S.*?)\s*$")
+LICENSE_PATTERNS = ("LICENSE", "LICENSE.*", "LICENSE-*", "COPYING", "COPYING.*", "COPYING-*", "LICENSES/*.txt")
+LICENSE_REVIEW_NOTE = (
+    "License review required: verify publicly available source under DFSG-compliant licenses "
+    "for the app and all direct and transitive dependencies, compatible distribution terms, "
+    "and evidence that every binary dependency (including Maven JARs) can be reproduced from "
+    "its available source. License files and SPDX notices alone do not establish compliance. "
+    "See https://appfair.org/docs/inclusion-criteria/#license-and-dependencies"
+)
 # How far in the notice may sit, so a shebang or an attribute can precede it.
 SPDX_WITHIN = 5
-
-
-class TemplateUnavailable(Exception):
-    """The template answered 4xx: its repository, ref or file name is wrong."""
-
-
-def http_get(url: str) -> str:
-    """One GET, as text. Raises on anything but a 200."""
-    request = urllib.request.Request(url, headers={"User-Agent": "appfair-lint"})
-    with urllib.request.urlopen(request, timeout=TEMPLATE_TIMEOUT) as response:  # noqa: S310
-        return response.read().decode("utf-8")
-
-
-@dataclass(frozen=True)
-class Source:
-    """One canonical text and where it was read from."""
-
-    text: str
-    origin: str
-    #: Why the template was not used, when it could not be reached.
-    fell_back: str | None = None
-
-
-@dataclass
-class Template:
-    """The App Fair app template, as `owner/repo@ref`.
-
-    A file is read from it over HTTPS; the copy under `reference/` answers when it cannot be
-    reached, so a network failure does not turn into an app's lint failure.
-    """
-
-    spec: str = TEMPLATE
-    reference: Path = REFERENCE
-    #: How a URL is read; the tests pass one that serves from memory.
-    get: Callable[[str], str] | None = None
-    _cache: dict[str, Source] = field(default_factory=dict, repr=False)
-
-    def read(self, url: str) -> str:
-        return (self.get or http_get)(url)
-
-    @property
-    def repo(self) -> str:
-        return self.spec.split("@", 1)[0]
-
-    @property
-    def ref(self) -> str:
-        return self.spec.split("@", 1)[1] if "@" in self.spec else "main"
-
-    def url(self, name: str) -> str:
-        return f"https://raw.githubusercontent.com/{self.repo}/{self.ref}/{name}"
-
-    def blob(self, name: str) -> str:
-        """The file's page on GitHub, for a message someone reads."""
-        return f"https://github.com/{self.repo}/blob/{self.ref}/{name}"
-
-    def source(self, name: str) -> Source:
-        """`name` from the template.
-
-        A connection that fails falls back to `reference/`, so a network failure does not fail an
-        app's lint. A 4xx answer raises instead, since it means the spec is wrong.
-        """
-        if name not in self._cache:
-            url = self.url(name)
-            try:
-                self._cache[name] = Source(self.read(url), url)
-            except urllib.error.HTTPError as error:
-                if 400 <= error.code < 500:
-                    raise TemplateUnavailable(
-                        f"{url} answered {error.code} {error.reason}"
-                    ) from error
-                self._cache[name] = self._fallback(name, url, error)
-            except (urllib.error.URLError, OSError, ValueError) as error:
-                self._cache[name] = self._fallback(name, url, error)
-        return self._cache[name]
-
-    def _fallback(self, name: str, url: str, error: Exception) -> Source:
-        local = self.reference / name
-        return Source(
-            local.read_text(encoding="utf-8"),
-            f"{local.name} (this action's copy)",
-            f"{url} could not be read ({error}), so the comparison used this action's copy",
-        )
 
 
 @dataclass(frozen=True)
@@ -180,9 +93,7 @@ class Project:
     root: Path
     #: The build flavor whose manifest carries the identity the App Fair publishes under.
     flavor: str = "appfair"
-    #: Where the licence texts are read from.
-    template: Template = field(default_factory=Template)
-    #: Anything a rule wants said that is not a finding, such as a template it could not reach.
+    #: Anything a rule wants said that is not a finding, such as a required manual review.
     notes: list[str] = field(default_factory=list)
 
     def path(self, *parts: str) -> Path:
@@ -276,78 +187,36 @@ def flavor_manifest(project: Project) -> Iterable[Finding]:
     )
 
 
-def _compare_to_template(project: Project, name: str, code: str, what: str) -> Iterable[Finding]:
-    """One licence file against the template's, character for character, reported at the first
-    line that differs."""
-    try:
-        source = project.template.source(name)
-    except TemplateUnavailable as error:
-        yield Finding(
-            code,
-            f"{name} could not be read from the App Fair app template: {error}",
-            "check the action's `template` input (owner/repo@ref); it names where the licence "
-            f"texts come from, and the default is {DEFAULT_TEMPLATE}",
-        )
-        return
-    if source.fell_back and source.fell_back not in project.notes:
-        project.notes.append(source.fell_back)
-    expected = source.text
-    blob = project.template.blob(name)
-    path = project.path(name)
-    if not path.is_file():
-        yield Finding(
-            code,
-            f"{name} is missing, and every app in the catalog ships {what}",
-            f"copy it from the App Fair app template: {blob}",
-            path=name,
-        )
-        return
-    actual = project.read(path)
-    if actual is None:
-        yield Finding(code, f"{name} is not readable as UTF-8 text", f"restore it from {blob}", path=name)
-        return
-    if actual == expected:
-        return
-    mine, theirs = actual.splitlines(), expected.splitlines()
-    for number, (got, want) in enumerate(zip(mine, theirs), start=1):
-        if got != want:
-            yield Finding(
-                code,
-                f"{name} differs from {what} at line {number}:\n"
-                f"      expected: {want.strip()!r}\n"
-                f"      found:    {got.strip()!r}\n"
-                f"      compared against: {source.origin}",
-                f"restore the line, or replace the file with {blob}",
-                path=name,
-                line=number,
-            )
-            return
-    longer = "shorter" if len(mine) < len(theirs) else "longer"
-    yield Finding(
-        code,
-        f"{name} is {longer} than {what}: {len(mine)} lines against {len(theirs)}\n"
-        f"      compared against: {source.origin}",
-        f"replace it with {blob}",
-        path=name,
-        line=min(len(mine), len(theirs)) + 1,
-    )
+def license_files(project: Project) -> list[Path]:
+    return sorted({
+        path for pattern in LICENSE_PATTERNS for path in project.root.glob(pattern)
+        if path.is_file() and path.name != "LICENSE-EXCEPTIONS.txt"
+    })
 
 
-@rule("license", "LICENSE.txt is the GNU AGPL 3.0 text the app template carries")
+@rule("license", "The app includes license texts for review under the DFSG policy")
 def license_text(project: Project) -> Iterable[Finding]:
-    """The catalog publishes free software under the unmodified AGPL."""
-    yield from _compare_to_template(project, "LICENSE.txt", "license", "the AGPL-3.0 text")
-
-
-@rule("license-exception", "LICENSE-EXCEPTIONS.txt is the App Fair distribution exception")
-def license_exception(project: Project) -> Iterable[Finding]:
-    """The additional permission that lets the App Fair sign and submit the app to the stores."""
-    yield from _compare_to_template(
-        project,
-        "LICENSE-EXCEPTIONS.txt",
-        "license-exception",
-        "the App Fair Distribution Exception",
-    )
+    """Check documentation exists; reviewers assess the actual terms and dependency sources."""
+    if LICENSE_REVIEW_NOTE not in project.notes:
+        project.notes.append(LICENSE_REVIEW_NOTE)
+    paths = license_files(project)
+    if not paths:
+        yield Finding(
+            "license",
+            "No license text was found for the app",
+            "include the applicable DFSG-compliant license text in LICENSE, COPYING, "
+            "a LICENSE/COPYING file with an extension or suffix, or LICENSES/*.txt; "
+            "retain required notices and provide dependency source and binary rebuild evidence",
+        )
+    for path in paths:
+        text = project.read(path)
+        if text is None or not text.strip():
+            yield Finding(
+                "license",
+                f"{project.rel(path)} is empty or not readable as UTF-8 text",
+                "include the complete applicable license text for review",
+                path=project.rel(path),
+            )
 
 
 def _ids(manifest: dict) -> dict[str, str]:
@@ -431,12 +300,13 @@ def spdx_headers(project: Project) -> Iterable[Finding]:
         if text is None:
             continue
         head = text.splitlines()[:SPDX_WITHIN]
-        if any(SPDX in line for line in head):
+        if any(SPDX_NOTICE.fullmatch(line) for line in head):
             continue
         yield Finding(
             "spdx-headers",
             f"{project.rel(path)} carries no licence notice in its first {SPDX_WITHIN} lines",
-            f"add this line at the top of the file:\n    {SPDX_LINE}",
+            "add an SPDX-License-Identifier comment naming the actual license expression "
+            "for this file; retain existing third-party notices and use DFSG-compliant terms",
             path=project.rel(path),
             line=1,
         )
@@ -451,7 +321,7 @@ def spdx_headers(project: Project) -> Iterable[Finding]:
 class Report:
     findings: list[Finding] = field(default_factory=list)
     checked: list[str] = field(default_factory=list)
-    #: What a rule wants said without failing the run, such as a template it could not reach.
+    #: What a rule wants said without failing the run, such as a required manual review.
     notes: list[str] = field(default_factory=list)
 
 
@@ -500,37 +370,6 @@ def emit(report: Report, annotate: bool) -> None:
         print(f"appfair-lint: {len(report.checked)} rule(s) passed: {rules}")
 
 
-def check_template(template: Template) -> int:
-    """This action's `reference/` copies against the template, for this repository's own checks.
-
-    The copies are the fallback for a run that cannot reach the template, so drift here means a
-    lint without network would measure an app against the wrong text.
-    """
-    drifted = 0
-    for path in sorted(template.reference.iterdir()):
-        try:
-            canonical = template.read(template.url(path.name))
-        except (urllib.error.URLError, OSError, ValueError) as error:
-            print(f"::error::{template.url(path.name)} could not be read ({error})")
-            return 1
-        mine = path.read_text(encoding="utf-8")
-        if mine == canonical:
-            print(f"ok   reference/{path.name} matches {template.blob(path.name)}")
-            continue
-        drifted += 1
-        theirs, ours = canonical.splitlines(), mine.splitlines()
-        line = next(
-            (n for n, (a, b) in enumerate(zip(ours, theirs), start=1) if a != b),
-            min(len(ours), len(theirs)) + 1,
-        )
-        print(
-            f"::error file=.github/actions/appfair-lint/reference/{path.name},line={line}::"
-            f"reference/{path.name} differs from {template.blob(path.name)} at line {line}. "
-            f"Fix: copy the template's file over it"
-        )
-    return 1 if drifted else 0
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="appfair-lint",
@@ -541,16 +380,6 @@ def main(argv: list[str] | None = None) -> int:
         "--flavor",
         default=os.environ.get("APPFAIR_FLAVOR", "appfair"),
         help="the build flavor carrying the App Fair identity (default: appfair)",
-    )
-    parser.add_argument(
-        "--template",
-        default=TEMPLATE,
-        help=f"the app template the licence texts come from, owner/repo@ref (default: {TEMPLATE})",
-    )
-    parser.add_argument(
-        "--check-template",
-        action="store_true",
-        help="compare this action's reference/ copies with the template and stop",
     )
     parser.add_argument("--only", default="", help="run only these rules, comma-separated")
     parser.add_argument("--skip", default="", help="run every rule but these, comma-separated")
@@ -563,9 +392,6 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{code:18} {entry.summary}")
         return 0
 
-    if args.check_template:
-        return check_template(Template(spec=args.template))
-
     split = lambda value: [p.strip() for p in value.replace(",", " ").split() if p.strip()]  # noqa: E731
     only, skip = split(args.only), split(args.skip)
     for code in only + skip:
@@ -575,12 +401,11 @@ def main(argv: list[str] | None = None) -> int:
     project = Project(
         root=Path(args.path).resolve(),
         flavor=args.flavor,
-        template=Template(spec=args.template),
     )
     report = run(project, only=only, skip=skip)
 
     if args.format == "json":
-        print(json.dumps({"checked": report.checked, "findings": [f.__dict__ for f in report.findings]}, indent=2))
+        print(json.dumps({"checked": report.checked, "findings": [f.__dict__ for f in report.findings], "notes": report.notes}, indent=2))
     else:
         emit(report, annotate=bool(os.environ.get("GITHUB_ACTIONS")))
     return 1 if report.findings else 0

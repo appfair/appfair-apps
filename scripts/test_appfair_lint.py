@@ -6,7 +6,6 @@ failure in its own test instead of in a shared sample tree.
 
 import contextlib
 import io
-import shutil
 import sys
 import tempfile
 import unittest
@@ -17,7 +16,8 @@ sys.path.insert(0, str(ROOT / ".github" / "actions" / "appfair-lint"))
 
 import appfair_lint as lint  # noqa: E402
 
-SPDX = f"{lint.SPDX_LINE}\n"
+# Synthetic source fixture; license terms are assessed separately during review.
+SPDX = "// SPDX-License-Identifier: MIT\n"
 
 
 class LintTests(unittest.TestCase):
@@ -25,36 +25,12 @@ class LintTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        # No test reaches the network: the template answers out of `reference/`, which holds the
-        # same text. A test that wants a different answer passes its own `template()`.
-        original = lint.http_get
-        lint.http_get = lambda url: (lint.REFERENCE / url.rsplit("/", 1)[-1]).read_text()
-        self.addCleanup(lambda: setattr(lint, "http_get", original))
-
-    def template(self, files: dict[str, str] | None = None, fail: Exception | None = None):
-        """A template served from memory, so the tests never reach the network.
-
-        `files` overrides what a name returns; anything else comes from `reference/`, which is
-        what the template holds. `fail` is raised instead, for the fallback and error paths.
-        """
-        served = dict(files or {})
-
-        def get(url: str) -> str:
-            if fail is not None:
-                raise fail
-            name = url.rsplit("/", 1)[-1]
-            if name in served:
-                return served[name]
-            return (lint.REFERENCE / name).read_text()
-
-        return lint.Template(spec="appfair/day-appfair@main", get=get)
 
     def good(self) -> Path:
         """An app that passes every rule."""
         (self.root / "Day.toml").write_text('schema = 1\n[app]\nid = "io.github.Demo"\n')
         (self.root / "Day-appfair.toml").write_text('[app]\nid = "org.appfair.app.Demo"\n')
-        for name in ("LICENSE.txt", "LICENSE-EXCEPTIONS.txt"):
-            shutil.copy(lint.REFERENCE / name, self.root / name)
+        (self.root / "LICENSE.txt").write_text("Synthetic license fixture for presence checks\n")
         (self.root / "src").mkdir()
         (self.root / "src" / "lib.rs").write_text(SPDX + "pub fn demo() {}\n")
         return self.root
@@ -63,7 +39,7 @@ class LintTests(unittest.TestCase):
         return self.report(**kwargs).findings
 
     def report(self, project: lint.Project | None = None, **kwargs) -> lint.Report:
-        return lint.run(project or lint.Project(root=self.root, template=self.template()), **kwargs)
+        return lint.run(project or lint.Project(root=self.root), **kwargs)
 
     def codes(self, **kwargs) -> list[str]:
         return [f.rule for f in self.findings(**kwargs)]
@@ -81,7 +57,7 @@ class LintTests(unittest.TestCase):
         # An empty directory: no manifest, no flavor, no licences, and nothing to read them from.
         codes = self.codes()
         self.assertEqual(
-            sorted(codes), ["day-project", "flavor-manifest", "license", "license-exception"]
+            sorted(codes), ["day-project", "flavor-manifest", "license"]
         )
 
     def test_a_missing_flavor_manifest_says_what_to_write(self):
@@ -93,75 +69,62 @@ class LintTests(unittest.TestCase):
         self.assertIn("org.appfair.app.", found[0].fix)
         # The flavor is an input, so a catalog that names its own finds its own file.
         other = lint.run(
-            lint.Project(root=self.root, flavor="gamesfair", template=self.template()),
+            lint.Project(root=self.root, flavor="gamesfair"),
             only=["flavor-manifest"],
         )
         self.assertIn("Day-gamesfair.toml", other.findings[0].message)
 
-    def test_the_licence_is_compared_with_the_app_template_s_own(self):
-        """The template is the source: a licence that matches `reference/` but not the template
-        is still wrong, and the finding says which text it was measured against."""
+    def test_license_choices_pass_without_network_access(self):
         self.good()
-        moved_on = (lint.REFERENCE / "LICENSE.txt").read_text().replace(
-            "GNU AFFERO GENERAL PUBLIC LICENSE", "GNU AFFERO GENERAL PUBLIC LICENCE", 1
-        )
-        project = lint.Project(
-            root=self.root, template=self.template({"LICENSE.txt": moved_on})
-        )
-        found = self.report(project, only=["license"]).findings
-        self.assertEqual(len(found), 1)
-        self.assertIn("LICENCE", found[0].message)
-        self.assertIn(
-            "raw.githubusercontent.com/appfair/day-appfair/main/LICENSE.txt", found[0].message
-        )
-        self.assertIn("github.com/appfair/day-appfair/blob/main/LICENSE.txt", found[0].fix)
+        (self.root / "LICENSE.txt").unlink()
+        # Synthetic license texts: the lint checks presence, leaving terms to human review.
+        for expression in ("MIT", "Apache-2.0", "GPL-3.0-or-later", "MIT OR Apache-2.0"):
+            with self.subTest(expression=expression):
+                (self.root / "COPYING").write_text(f"Synthetic {expression} license fixture\n")
+                (self.root / "src/lib.rs").write_text(
+                    f"// SPDX-License-Identifier: {expression}\npub fn demo() {{}}\n"
+                )
+                from unittest.mock import patch
+                with patch("socket.create_connection", side_effect=AssertionError("network")):
+                    report = self.report()
+                self.assertEqual(report.findings, [])
+                self.assertIn("transitive dependencies", " ".join(report.notes))
+                self.assertIn("binary dependency", " ".join(report.notes))
 
-    def test_a_template_that_cannot_be_reached_falls_back_and_says_so(self):
-        """A network failure is not the app's fault, so the run uses this action's copy and
-        notes it. An answer of 4xx is a wrong `template` input, and fails."""
+    def test_missing_empty_and_unreadable_license_texts_fail(self):
         self.good()
-        import urllib.error
+        p = self.root / "LICENSE.txt"
+        for content in (b"", b"   \n", b"\xff"):
+            with self.subTest(content=content):
+                p.write_bytes(content)
+                found = self.findings(only=["license"])
+                self.assertEqual(len(found), 1)
+                self.assertEqual(found[0].path, "LICENSE.txt")
+        p.unlink()
+        self.assertEqual(self.codes(only=["license"]), ["license"])
 
-        offline = lint.Project(
-            root=self.root,
-            template=self.template(fail=urllib.error.URLError("no route to host")),
-        )
-        report = self.report(offline, only=["license"])
+    def test_license_file_conventions_and_reuse_directory(self):
+        self.good()
+        (self.root / "LICENSE.txt").unlink()
+        for name in ("LICENSE", "LICENSE.md", "LICENSE-MIT", "COPYING", "COPYING.txt", "LICENSES/MIT.txt"):
+            with self.subTest(name=name):
+                p = self.root / name
+                p.parent.mkdir(exist_ok=True)
+                p.write_text("Synthetic license fixture for presence check\n")
+                self.assertEqual(self.findings(only=["license"]), [])
+                p.unlink()
+
+    def test_license_presence_does_not_claim_compliance(self):
+        self.good()
+        (self.root / "LICENSE.txt").write_text("Synthetic nonfree terms for manual review\n")
+        report = self.report(only=["license"])
         self.assertEqual(report.findings, [])
-        self.assertEqual(len(report.notes), 1)
-        self.assertIn("this action's copy", report.notes[0])
-
-        gone = urllib.error.HTTPError("url", 404, "Not Found", {}, io.BytesIO(b""))  # type: ignore[arg-type]
-        self.addCleanup(gone.close)
-        missing = lint.Project(root=self.root, template=self.template(fail=gone))
-        found = self.report(missing, only=["license"]).findings
-        self.assertEqual(len(found), 1)
-        self.assertIn("404", found[0].message)
-        self.assertIn("`template` input", found[0].fix)
-
-    def test_the_action_s_copies_are_checked_against_the_template(self):
-        """`--check-template` is what keeps the offline fallback honest."""
-        self.assertEqual(self.silently(lint.check_template, self.template()), 0)
-        drifted = self.template({"LICENSE.txt": "A licence of my own\n"})
-        self.assertEqual(self.silently(lint.check_template, drifted), 1)
-
-    def test_an_edited_licence_is_reported_at_the_line_that_differs(self):
-        self.good()
-        text = (self.root / "LICENSE.txt").read_text().splitlines()
-        text[12] = "  Copyright (C) 2026 Someone Else"
-        (self.root / "LICENSE.txt").write_text("\n".join(text) + "\n")
-        found = self.findings(only=["license"])
-        self.assertEqual(len(found), 1)
-        self.assertEqual(found[0].line, 13)
-        self.assertIn("Someone Else", found[0].message)
-
-    def test_a_truncated_licence_is_reported_by_its_length(self):
-        self.good()
-        keep = (self.root / "LICENSE-EXCEPTIONS.txt").read_text().splitlines()[:10]
-        (self.root / "LICENSE-EXCEPTIONS.txt").write_text("\n".join(keep) + "\n")
-        found = self.findings(only=["license-exception"])
-        self.assertEqual(len(found), 1)
-        self.assertIn("shorter", found[0].message)
+        self.assertIn("do not establish compliance", report.notes[0])
+        import json
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            lint.main(["--path", str(self.root), "--only", "license", "--format", "json"])
+        self.assertEqual(json.loads(output.getvalue())["notes"], report.notes)
 
     def test_an_id_android_cannot_build_is_named_with_the_platform_and_the_fix(self):
         self.good()
@@ -215,7 +178,14 @@ class LintTests(unittest.TestCase):
         (self.root / "src" / "main.rs").write_text("fn main() {}\n")
         found = self.findings(only=["spdx-headers"])
         self.assertEqual([f.path for f in found], ["src/main.rs"])
-        self.assertIn(lint.SPDX_LINE, found[0].fix)
+        self.assertIn("SPDX-License-Identifier", found[0].fix)
+
+    def test_empty_or_unlabelled_source_notices_fail(self):
+        self.good()
+        for notice in ("// MIT", "// SPDX-License-Identifier:   ", "// MIT OR Apache-2.0"):
+            with self.subTest(notice=notice):
+                (self.root / "src/lib.rs").write_text(notice + "\n")
+                self.assertEqual(self.codes(only=["spdx-headers"]), ["spdx-headers"])
 
     def test_the_notice_may_follow_a_shebang_or_an_attribute(self):
         self.good()
@@ -262,7 +232,7 @@ class LintTests(unittest.TestCase):
 
         action = yaml.safe_load((ROOT / ".github/actions/appfair-lint/action.yml").read_text())
         self.assertEqual(
-            sorted(action["inputs"]), ["flavor", "only", "path", "skip", "template"]
+            sorted(action["inputs"]), ["flavor", "only", "path", "skip"]
         )
         # Every input reaches the script, or it is an input in name only.
         run = action["runs"]["steps"][0]["run"]

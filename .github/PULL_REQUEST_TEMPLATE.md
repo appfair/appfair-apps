@@ -21,6 +21,12 @@ Two narrower templates:
 
 ## Confirmations
 
+- [ ] The app and all direct and transitive dependencies have publicly available source under
+      DFSG-compliant licenses with compatible distribution terms; required notices are retained.
+- [ ] For every binary dependency (including Maven JARs), I have provided source revisions,
+      build instructions and environment, and evidence that the released binary can be reproduced
+      from that source, or this release uses no binary dependencies.
+
 - [ ] The tag exists in the app's repository, points at the pinned commit, and is the version
       to publish.
 - [ ] Its release carries the packages the app's CI built (`.aab`, `.ipa`), which the App Fair's

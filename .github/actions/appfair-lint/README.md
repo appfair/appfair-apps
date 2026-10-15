@@ -18,7 +18,6 @@ jobs:
 |---|---|---|
 | `path` | `.` | The project directory, the one holding `Day.toml`. |
 | `flavor` | `appfair` | The build flavor whose manifest carries the identity the catalog publishes the app under. |
-| `template` | `appfair/day-appfair@main` | The App Fair app template the licence texts are compared against, `owner/repo@ref`. |
 | `only` | (all) | Run only these rules, comma-separated. |
 | `skip` | (none) | Run every rule but these, comma-separated. |
 
@@ -30,26 +29,31 @@ jobs:
 |---|---|
 | `day-project` | The directory holds a `Day.toml`, so there is a Day project to check. |
 | `flavor-manifest` | `Day-appfair.toml` is there, which is where the ids the App Fair publishes under live. |
-| `license` | `LICENSE.txt` matches the app template's, character for character. |
-| `license-exception` | `LICENSE-EXCEPTIONS.txt` matches the app template's, the same way. |
+| `license` | A nonempty, readable license text is present in `LICENSE`, `COPYING`, a suffixed variant, or `LICENSES/*.txt`. DFSG compliance requires review. |
 | `app-ids` | The id each platform builds under is one that platform accepts. Android and HarmonyOS read it as a Java package name, so a hyphen there needs an `[app.android]` / `[app.harmony]` override. |
-| `spdx-headers` | Every `.rs` file names its licence in its first five lines. |
+| `spdx-headers` | Every `.rs` file has a nonempty `// SPDX-License-Identifier:` notice in its first five lines, naming its own license expression. This does not validate the expression or its terms. |
 
 A failure names the file, the line, what is wrong and the text that fixes it, and annotates the
 file in Actions. Every rule runs, so one push reports every problem.
 
 ## The licence texts
 
-The two licence rules read
-[LICENSE.txt](https://github.com/appfair/day-appfair/blob/main/LICENSE.txt) and
-[LICENSE-EXCEPTIONS.txt](https://github.com/appfair/day-appfair/blob/main/LICENSE-EXCEPTIONS.txt)
-from the app template over HTTPS and compare them character for character, so the text an app is
-scaffolded with is the text it is held to.
+Apps may use any license meeting the [Debian Free Software Guidelines (DFSG)](https://www.debian.org/social_contract.html#guidelines).
+The app and **all dependent software, including transitive dependencies**, must have publicly
+available source under DFSG-compliant licenses, with terms compatible with distribution together.
+Binary dependencies, including Maven JARs, are permitted only if the released binary can provably
+be reproduced by building the available source. Review the exact source revisions, build
+instructions and environment, and verification evidence for each binary used.
 
-`reference/` holds a copy of each, used when the template cannot be reached, which keeps a
-network failure from becoming an app's lint failure. The run says so when it happens, and
-`appfair_lint.py --check-template` compares the copies with the template; this repository's
-checks run it, daily among other times.
+The `license` rule checks for license documentation and emits a review reminder in both text and
+JSON reports. It does not recognize license texts, certify DFSG compliance, resolve dependency
+trees, or prove binary reproducibility. Those are required review steps under the
+[inclusion criteria](https://appfair.org/docs/inclusion-criteria/#license-and-dependencies).
+Rebuilding an app using the same prebuilt dependency does not verify that dependency's source.
+
+License and notice checks run locally without fetching a reference license or requiring a
+particular starter project. Retain all applicable license texts, exceptions and notices;
+reviewers assess their terms under the same policy.
 
 ## Adding a rule
 
@@ -67,6 +71,5 @@ def store_listing(project: Project) -> Iterable[Finding]:
         )
 ```
 
-`Project` gives the root, the flavor name, `sources(".rs")` for a walk that skips build output,
-and `template` for the app template's own files. Cover the rule in
+`Project` gives the root, the flavor name, and `sources(".rs")` for a walk that skips build output. Cover the rule in
 `scripts/test_appfair_lint.py`, which this repository's checks run.

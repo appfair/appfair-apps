@@ -9,6 +9,12 @@
 
 ## Confirmations
 
+- [ ] The app and all direct and transitive dependencies have publicly available source under
+      DFSG-compliant licenses with compatible distribution terms; required notices are retained.
+- [ ] For every binary dependency (including Maven JARs), I have provided source revisions,
+      build instructions and environment, and evidence that the released binary can be reproduced
+      from that source, or this release uses no binary dependencies.
+
 - [ ] The new tag exists, points at the pinned commit, builds the version this submission
       names, and carries its release packages for the comparison.
 - [ ] The version and build number climb past what the stores already have. Both stores refuse a

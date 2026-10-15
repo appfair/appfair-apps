@@ -281,6 +281,24 @@ someone with write access to the app's repository, or a public member of its org
 without comment, and anything else leaves a warning for the reviewer. A list kept here would go
 out of date as soon as an app changed hands.
 
+## License and dependency review
+
+The app's source and the source of **all dependent software, including transitive dependencies**,
+must be publicly available under licenses meeting the
+[Debian Free Software Guidelines (DFSG)](https://www.debian.org/social_contract.html#guidelines).
+No particular license is required. Retain applicable license texts and notices, and verify that
+license terms permit distribution of the components together.
+
+For each release, review the full dependency tree, including native libraries, SDKs, plugins and
+copied code. Binary dependencies such as Maven JARs are permitted only if their released binaries
+can provably be reproduced by building the available source. Supply exact source revisions, build
+instructions and environment, and verification evidence for the binaries used. A source archive,
+package repository listing or app rebuild using the same prebuilt dependencies is not proof.
+
+The lint checks documentation and notices; it does not establish DFSG compliance, dependency
+coverage, license compatibility or binary reproducibility. Reviewers must verify these before
+approving a submission. See the [inclusion criteria](https://appfair.org/docs/inclusion-criteria/#license-and-dependencies).
+
 ## What the checks do
 
 A pull request runs every stage of a submission. The first seven run on every push to it; the
@@ -290,8 +308,8 @@ eighth waits for an App Fair maintainer.
    checked too.
 2. **The file**: the shape above, the tag pattern, the channels and their targets, and the
    uniqueness of the title and of the ids across the catalog.
-3. **The app's repository** (`appfair-lint`): `LICENSE.txt` is the AGPL text, `LICENSE-EXCEPTIONS.txt`
-   the distribution exception, every Rust source names the licence it is under, and
+3. **The app's repository** (`appfair-lint`): license texts are present for review under the DFSG
+   policy, every Rust source names the licence it is under, and
    `Day-appfair.toml` carries the identity the catalog publishes. Run it yourself with
    `uses: appfair/appfair-apps/.github/actions/appfair-lint@main`, and nothing here is a surprise.
 4. **The app against the file**: the pinned commit's manifest, read through a sparse checkout that

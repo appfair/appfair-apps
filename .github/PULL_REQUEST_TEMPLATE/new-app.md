@@ -20,6 +20,12 @@
 
 ## Confirmations
 
+- [ ] The app and all direct and transitive dependencies have publicly available source under
+      DFSG-compliant licenses with compatible distribution terms; required notices are retained.
+- [ ] For every binary dependency (including Maven JARs), I have provided source revisions,
+      build instructions and environment, and evidence that the released binary can be reproduced
+      from that source, or this release uses no binary dependencies.
+
 - [ ] The repository is public, its tag is a release, and that release carries the packages the
       app's CI built.
 - [ ] The app carries a `Day-appfair.toml` that builds it under an `org.appfair.app.` id.
