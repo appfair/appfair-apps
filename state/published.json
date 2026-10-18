@@ -30,12 +30,12 @@
         "google-play-store"
       ],
       "id": "org.appfair.app.Stanza-Redux",
-      "published": "2026-10-14T13:04:26Z",
+      "published": "2026-10-18T15:07:17Z",
       "repo": "https://github.com/Stanza-Redux/Stanza-Redux",
-      "run": "https://github.com/appfair/appfair-apps/actions/runs/38564894751",
-      "tag": "v2.0.5",
+      "run": "https://github.com/appfair/appfair-apps/actions/runs/39136110059",
+      "tag": "v2.1.0",
       "title": "Stanza Redux"
     }
   },
-  "updated": "2026-10-18T15:05:46Z"
+  "updated": "2026-10-18T15:07:17Z"
 }
