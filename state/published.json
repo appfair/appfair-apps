@@ -18,10 +18,10 @@
         "google-play-store"
       ],
       "id": "org.appfair.app.Games-Fair",
-      "published": "2026-10-18T15:05:46Z",
+      "published": "2026-10-21T01:50:29Z",
       "repo": "https://github.com/Games-Fair/Games-Fair",
-      "run": "https://github.com/appfair/appfair-apps/actions/runs/39136123407",
-      "tag": "v2.4.0",
+      "run": "https://github.com/appfair/appfair-apps/actions/runs/39514752995",
+      "tag": "v2.5.0",
       "title": "Games Fair"
     },
     "Stanza-Redux": {
@@ -30,12 +30,12 @@
         "google-play-store"
       ],
       "id": "org.appfair.app.Stanza-Redux",
-      "published": "2026-10-18T15:07:17Z",
+      "published": "2026-10-21T01:50:29Z",
       "repo": "https://github.com/Stanza-Redux/Stanza-Redux",
-      "run": "https://github.com/appfair/appfair-apps/actions/runs/39136110059",
-      "tag": "v2.1.0",
+      "run": "https://github.com/appfair/appfair-apps/actions/runs/39514752995",
+      "tag": "v2.2.0",
       "title": "Stanza Redux"
     }
   },
-  "updated": "2026-10-18T15:07:17Z"
+  "updated": "2026-10-21T01:50:29Z"
 }
