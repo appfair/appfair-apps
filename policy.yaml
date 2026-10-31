@@ -203,7 +203,11 @@ mismatch: block
 override-label: allow-mismatch
 
 # Scan every file in the package with ClamAV before signing it.
-virus-scan: true
+#
+# Off for now: Homebrew's clamav 1.5.4_1 bottle, rebuilt on OpenSSL 4, rejects every signature
+# database on macOS ("NULL X509 store", https://github.com/Homebrew/homebrew-core/issues/322048),
+# so every iOS validate fails. Set this back to true once Homebrew ships a fixed bottle.
+virus-scan: false
 
 # Permissions the framework adds to every app, which no app manifest declares. `{id}` stands for
 # the application id. Anything beyond this list and the app's declarations is reported.
