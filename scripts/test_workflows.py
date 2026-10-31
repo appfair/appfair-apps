@@ -58,6 +58,37 @@ def triggers(workflow: dict) -> dict:
 
 
 class FlowTests(unittest.TestCase):
+    def test_submission_scope_fails_before_planning_and_posts_the_error(self):
+        plan = WORKFLOWS["pr"]["jobs"]["plan"]
+        steps = plan["steps"]
+        names = [step.get("name") for step in steps]
+        scope = next(step for step in steps if step.get("id") == "scope")
+        self.assertNotIn("continue-on-error", scope)
+        self.assertIn("check_pr_scope.py", scope["run"])
+        self.assertEqual(scope["env"]["BASE_SHA"], "${{ github.event.pull_request.base.sha }}")
+        self.assertLess(names.index(scope["name"]), names.index("Run the catalog's selftest"))
+        self.assertLess(names.index(scope["name"]), names.index("Plan the changed submissions"))
+        self.assertEqual(plan["permissions"]["pull-requests"], "write")
+        post = steps[names.index("Post the submission scope error")]
+        self.assertIn("failure()", post["if"])
+        self.assertIn("steps.scope.outputs.blocked == 'true'", post["if"])
+        self.assertIn("head.repo.full_name == github.repository", post["if"])
+        self.assertEqual(post["uses"], "./.github/actions/post-review")
+        self.assertEqual(post["with"]["summary"], "review/review.md")
+        upload = steps[names.index("Keep the submission scope error for fork comments")]
+        self.assertIn("failure()", upload["if"])
+        self.assertIn("steps.scope.outputs.blocked == 'true'", upload["if"])
+        self.assertEqual(upload["with"]["name"], "review-comment")
+        self.assertEqual(upload["with"]["path"].split(), ["review/review.md", "review/review-pr.txt"])
+        self.assertEqual(WORKFLOWS["comment"]["permissions"]["actions"], "read")
+        # An empty count after the guard fails must not run review or overwrite its comment.
+        review = WORKFLOWS["pr"]["jobs"]["review"]
+        self.assertIn("needs.plan.result == 'success'", review["if"])
+        for job, step_name in ((plan, "Plan the changed submissions"),
+                               (review, "Summarize the source changes")):
+            run = next(s["run"] for s in job["steps"] if s.get("name") == step_name)
+            self.assertIn('--changed-from "${{ github.event.pull_request.base.sha }}"', run)
+
     def test_a_merge_publishes_nothing(self):
         """The whole point: publishing is not a side effect of merging."""
         self.assertEqual(sorted(triggers(WORKFLOWS["publish"])), ["workflow_dispatch"])

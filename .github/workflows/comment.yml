@@ -12,6 +12,7 @@ on:
 permissions:
   contents: read
   pull-requests: write
+  actions: read
 
 jobs:
   comment:
@@ -32,7 +33,7 @@ jobs:
           github-token: ${{ github.token }}
           path: review
 
-      # No artifact: the pull request changed no submission.
+      # The plan's scope error and the normal review use the same summary artifact.
       - name: Read the pull request number
         id: pr
         if: steps.fetch.outcome == 'success'

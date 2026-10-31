@@ -204,6 +204,12 @@ submission to the latest release, rewriting the `tag` and `commit` lines and lea
 the file alone. Both take `--tag` for a particular release, and both stop after writing and
 validating the file. They read the app's tags over the network and touch nothing else.
 
+Each submission pull request may change only one app's submission file. The first check rejects
+PRs that change multiple files under `apps/` and posts a comment listing them, before any app
+jobs start. Keep the intended app's changes and restore the other submission files to their
+base-branch contents; propose those updates in separate PRs. The check covers the entire PR
+diff, including additions and deletions, regardless of the PR title.
+
 To edit the file by hand, `scripts/queue.py resolve --token Faire-Games --tag v2.0.1` prints the
 two lines.
 

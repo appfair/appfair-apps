@@ -42,6 +42,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      pull-requests: write
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
       build-matrix: ${{ steps.plan.outputs.build-matrix }}
@@ -53,6 +54,30 @@ jobs:
         with:
           # The whole history: the plan diffs against the base branch.
           fetch-depth: 0
+      - name: Require a single app submission
+        id: scope
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: python3 scripts/check_pr_scope.py --base "$BASE_SHA" --pr "$PR_NUMBER" --out review
+      - name: Post the submission scope error
+        if: >-
+          failure() && steps.scope.outputs.blocked == 'true'
+          && github.event.pull_request.head.repo.full_name == github.repository
+        uses: ./.github/actions/post-review
+        with:
+          pr: ${{ github.event.pull_request.number }}
+          summary: review/review.md
+          token: ${{ github.token }}
+      - name: Keep the submission scope error for fork comments
+        if: failure() && steps.scope.outputs.blocked == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: review-comment
+          path: |
+            review/review.md
+            review/review-pr.txt
+          if-no-files-found: error
       - name: Run the catalog's selftest
         run: python3 scripts/queue.py selftest
       - name: Validate every submission
@@ -61,8 +86,7 @@ jobs:
         id: plan
         run: |
           set -euo pipefail
-          git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
-          python3 scripts/queue.py plan --changed-from "origin/${{ github.base_ref }}"
+          python3 scripts/queue.py plan --changed-from "${{ github.event.pull_request.base.sha }}"
       # Maintainership belongs to the app's repository, so this asks GitHub rather than keeping
       # a list here. It warns and passes; the reviewer who merges decides.
       - name: Check the author's maintainership
@@ -242,7 +266,7 @@ jobs:
   review:
     name: review
     needs: [plan, verify]
-    if: ${{ !cancelled() && needs.plan.outputs.count != '0' }}
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.count != '0' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -275,8 +299,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
-          python3 scripts/queue.py review --changed-from "origin/${{ github.base_ref }}" \
+          python3 scripts/queue.py review --changed-from "${{ github.event.pull_request.base.sha }}" \
             --listing listing --artifacts artifacts.json --out review.md
           echo "${{ github.event.pull_request.number }}" > review-pr.txt
       - name: Post the summary
