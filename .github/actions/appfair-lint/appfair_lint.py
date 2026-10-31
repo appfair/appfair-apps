@@ -46,9 +46,10 @@ APPLE_SEGMENT = re.compile(r"^[A-Za-z0-9][\w-]*$")
 JAVA_SEGMENT = re.compile(r"^[A-Za-z]\w*$")
 
 # The manifest keys an id can be overridden under, per platform: `[app.android]`, `[app.harmony]`
-# (with `[app.ohos]` as its older spelling), and the targets themselves.
+# (with `[app.ohos]` as its older spelling), and the targets themselves. Day still reads
+# `[app.android-mdc]` as the older spelling of `[app.android-material]`.
 PLATFORM_KEYS = {
-    "android": ["android", "android-mdc"],
+    "android": ["android", "android-material", "android-mdc"],
     "harmony": ["harmony", "ohos", "harmony-arkui"],
     "apple": ["ios", "macos", "ios-uikit", "macos-appkit", "macos-gtk", "macos-qt"],
 }

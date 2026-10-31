@@ -11,7 +11,7 @@ inputs:
     description: The commit to build, which a submission pins so a moved tag changes nothing.
     required: true
   target:
-    description: The Day target to build, such as ios-uikit or android-mdc.
+    description: The Day target to build, such as ios-uikit or android-material.
     required: true
   flavor:
     description: The build flavor carrying the App Fair identity, used when the app carries it.
@@ -61,8 +61,8 @@ runs:
         set -euo pipefail
         case "${{ inputs.target }}" in
           ios-uikit)   echo "targets=aarch64-apple-ios,aarch64-apple-ios-sim" >> "$GITHUB_OUTPUT" ;;
-          android-mdc) echo "targets=aarch64-linux-android,x86_64-linux-android" >> "$GITHUB_OUTPUT" ;;
-          *) echo "::error::this queue builds ios-uikit and android-mdc; ${{ inputs.target }} is neither"; exit 1 ;;
+          android-material) echo "targets=aarch64-linux-android,x86_64-linux-android" >> "$GITHUB_OUTPUT" ;;
+          *) echo "::error::this queue builds ios-uikit and android-material; ${{ inputs.target }} is neither"; exit 1 ;;
         esac
 
     - uses: dtolnay/rust-toolchain@stable

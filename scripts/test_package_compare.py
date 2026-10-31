@@ -31,8 +31,8 @@ def metadata(flavor=False):
     # no Day-appfair.toml from one whose flavor the workflow forgot.
     return {"flavor": "appfair" if flavor else None,
             "flavors": ["appfair"] if flavor else [], "project": {
-        **app, "targets": ["ios-uikit", "android-mdc"],
-        "resolved": {"ios-uikit": app, "android-mdc": android}}}
+        **app, "targets": ["ios-uikit", "android-material"],
+        "resolved": {"ios-uikit": app, "android-material": android}}}
 
 
 def plist(meta):
@@ -149,8 +149,8 @@ class ComparisonTests(unittest.TestCase):
     A: android:exported(0x6)=false
     A: android:name(0x7)="{permission}"
 '''
-        base = metadata()["project"]["resolved"]["android-mdc"]
-        flavor = metadata(True)["project"]["resolved"]["android-mdc"]
+        base = metadata()["project"]["resolved"]["android-material"]
+        flavor = metadata(True)["project"]["resolved"]["android-material"]
         a = normalize_android_manifest(manifest(base), base)
         b = normalize_android_manifest(manifest(flavor), flavor)
         self.assertEqual(a, b)
@@ -201,13 +201,13 @@ class ComparisonTests(unittest.TestCase):
             self.assertNotEqual(base, aab("modified.aab", name))
 
     def test_release_selection_uses_base_identity_and_rejects_ambiguity(self):
-        for name in ["fair-games-android-mdc.aab", "day-games-android-mdc.aab"]:
+        for name in ["fair-games-android-material.aab", "day-games-android-material.aab"]:
             (self.root / name).touch()
-        self.assertEqual(queue.select_release(self.root, metadata(), "android-mdc").name,
-                         "day-games-android-mdc.aab")
-        (self.root / "day-games-2.0.1-android-mdc.aab").touch()
+        self.assertEqual(queue.select_release(self.root, metadata(), "android-material").name,
+                         "day-games-android-material.aab")
+        (self.root / "day-games-2.0.1-android-material.aab").touch()
         with self.assertRaises(ValueError):
-            queue.select_release(self.root, metadata(), "android-mdc")
+            queue.select_release(self.root, metadata(), "android-material")
         (self.root / "day-games-ios-uikit-unsigned.ipa").touch()
         self.assertEqual(queue.select_release(self.root, metadata(), "ios-uikit").name,
                          "day-games-ios-uikit-unsigned.ipa")
@@ -215,7 +215,7 @@ class ComparisonTests(unittest.TestCase):
     def test_the_tag_names_the_version_and_the_commit_must_match(self):
         app = queue.App(self.root / "Faire-Games.yaml", {
             "token": "Faire-Games", "title": "Fair Games", "tag": "v1.9.0", "commit": "a" * 40,
-            "distribution": {"ios-uikit": ["apple-app-store"], "android-mdc": ["google-play-store"]}})
+            "distribution": {"ios-uikit": ["apple-app-store"], "android-material": ["google-play-store"]}})
         path = self.root / "metadata.json"
         meta = metadata(True)
         path.write_text(json.dumps(meta))
@@ -230,10 +230,10 @@ class ComparisonTests(unittest.TestCase):
             self.assertEqual(queue.cmd_verify(args), 1)
             # A target resolved to a version of its own is caught the same way.
             app.data["tag"] = "v1.9.0"
-            meta["project"]["resolved"]["android-mdc"]["version"] = "1.9.1"
+            meta["project"]["resolved"]["android-material"]["version"] = "1.9.1"
             path.write_text(json.dumps(meta))
             self.assertEqual(queue.cmd_verify(args), 1)
-            meta["project"]["resolved"]["android-mdc"]["version"] = "1.9.0"
+            meta["project"]["resolved"]["android-material"]["version"] = "1.9.0"
             path.write_text(json.dumps(meta))
             self.assertEqual(queue.cmd_verify(args), 0)
             # A tag that has moved off the pinned commit.
@@ -259,7 +259,7 @@ class ComparisonTests(unittest.TestCase):
         app = queue.App(self.root / "Games-Fair.yaml", {
             "token": "Games-Fair", "title": "Games Fair", "tag": "v1.9.0", "commit": "a" * 40,
             "id": "org.appfair.app.Faire-Games",
-            "distribution": {"ios-uikit": ["apple-app-store"], "android-mdc": ["google-play-store"]}})
+            "distribution": {"ios-uikit": ["apple-app-store"], "android-material": ["google-play-store"]}})
         args = argparse.Namespace(app="Games-Fair", metadata=str(path), tag_commit="a" * 40, offline=True)
         with patch.object(queue, "catalog", return_value=[app]), patch.dict(
             "os.environ", {"GITHUB_REPOSITORY": "appfair/appfair-apps"}
@@ -294,7 +294,7 @@ class ComparisonTests(unittest.TestCase):
             return queue.App(self.root / path_name, data)
         base = {"token": "Games-Fair", "title": "Games Fair", "tag": "v1.9.0", "commit": "a" * 40,
                 "distribution": {"ios-uikit": ["apple-app-store"],
-                                 "android-mdc": ["google-play-store"]}}
+                                 "android-material": ["google-play-store"]}}
         mine = app("Games-Fair.yaml", {**base, "id": "org.appfair.app.Faire-Games"})
         self.assertEqual(queue.validate_app(mine, policy), [])
         self.assertEqual(queue.published_android_id(mine, policy), "org.appfair.app.Faire_Games")

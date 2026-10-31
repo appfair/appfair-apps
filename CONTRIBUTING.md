@@ -36,7 +36,7 @@ id = "org.appfair.app.Faire-Games"
 title = "Fair Games"
 build = 36          # the store's build counter, past what the stores already have
 artifact = "fair-games"
-targets = ["ios-uikit", "android-mdc"]
+targets = ["ios-uikit", "android-material"]
 
 [app.android]
 id = "org.appfair.app.Faire_Games"   # Java package segments take no hyphen
@@ -91,7 +91,7 @@ apart from the walkthrough, naming its
 iphone = ["home", "puzzle"]
 ipad = ["home", { name = "puzzle", theme = "dark" }]
 
-[storefront.android-mdc.google-play-store.screenshots]
+[storefront.android-material.google-play-store.screenshots]
 default = ["home", "puzzle"]            # every device kind: phone and tablet alike
 ```
 
@@ -131,10 +131,10 @@ maintainer published. They carry the build flavor in their names, so nothing of 
 replaced:
 
 ```
-games-fair-android-mdc.apk            the maintainer's, unsigned by the App Fair
-games-fair-appfair-android-mdc.apk    the App Fair's, signed with the catalog's key
-games-fair-appfair-android-mdc.aab    the bundle Google Play received
-games-fair-appfair-ios-uikit.ipa      the archive App Store Connect received
+games-fair-android-material.apk            the maintainer's, unsigned by the App Fair
+games-fair-appfair-android-material.apk    the App Fair's, signed with the catalog's key
+games-fair-appfair-android-material.aab    the bundle Google Play received
+games-fair-appfair-ios-uikit.ipa           the archive App Store Connect received
 ```
 
 It takes write access to the app's repository, which you grant by installing the **App Fair**
@@ -169,7 +169,7 @@ its place, and the run says so and carries on.
 Once every package is on the release, a release still marked **pre-release** is promoted to the
 latest one. That keeps
 
-    https://github.com/<token>/<token>/releases/latest/download/<app>-appfair-android-mdc.apk
+    https://github.com/<token>/<token>/releases/latest/download/<app>-appfair-android-material.apk
 
 answering across a new version: tag the release as a pre-release, and it becomes `latest` when
 the App Fair's packages are on it rather than the moment it is published. A release that is
@@ -189,7 +189,7 @@ android-id: org.appfair.app.Faire_Games            # optional, the same pin for 
 distribution:                                      # required
   ios-uikit:
     - apple-app-store
-  android-mdc:
+  android-material:
     - google-play-store
 
 apple-app-store:                                   # optional, per channel
@@ -245,7 +245,7 @@ or taken up with the maintainer.
 | channel | target | what it does | settings |
 |---|---|---|---|
 | `apple-app-store` | `ios-uikit` | submits the build for App Review | `submit`, `profile-secret` |
-| `google-play-store` | `android-mdc` | submits the build to the production track | `submit` |
+| `google-play-store` | `android-material` | submits the build to the production track | `submit` |
 | `altstore`, `f-droid`, `samsung-galaxy-store` | | declared but not yet implemented; a submission naming one is rejected with that message | |
 
 An approved submission asks Apple to review the build and Google to review and roll it out to

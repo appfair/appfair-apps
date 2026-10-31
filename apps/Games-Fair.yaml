@@ -16,7 +16,7 @@ commit: 810d56ecc7f73fbbca5ffd767f9c537e622fe895
 # Where this app goes, keyed by the target that builds for it. policy.yaml lists the channels the
 # queue can publish to. Drop a line to keep the app off a channel.
 distribution:
-  android-mdc:
+  android-material:
     - google-play-store
   ios-uikit:
     - apple-app-store

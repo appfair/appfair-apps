@@ -15,7 +15,7 @@ commit: 549bac3f78ce937146b56a7acecc35cb361175e3
 distribution:
   ios-uikit:
     - apple-app-store
-  android-mdc:
+  android-material:
     - google-play-store
 ```
 
@@ -225,13 +225,13 @@ python3 scripts/queue.py update Faire-Games
 The validation steps also run against a package you already have:
 
 ```sh
-python3 scripts/queue.py inspect --package fair-games-android-mdc.aab \
-  --sibling fair-games-android-mdc.apk --out report.json
-python3 scripts/queue.py compare --ours fair-games-android-mdc.aab \
-  --theirs release/day-games-android-mdc.aab \
-  --metadata metadata.json --reference-metadata base-metadata.json --target android-mdc
+python3 scripts/queue.py inspect --package fair-games-android-material.aab \
+  --sibling fair-games-android-material.apk --out report.json
+python3 scripts/queue.py compare --ours fair-games-android-material.aab \
+  --theirs release/day-games-android-material.aab \
+  --metadata metadata.json --reference-metadata base-metadata.json --target android-material
 python3 scripts/queue.py audit --app Faire-Games --report report.json \
-  --metadata metadata.json --target android-mdc --sidecars . --expect-commit <sha>
+  --metadata metadata.json --target android-material --sidecars . --expect-commit <sha>
 ```
 
 `metadata.json` is `day --flavor appfair metadata --json` for an app that carries

@@ -138,7 +138,7 @@ def payload(path, metadata=None, target=None, aapt2=None, origins=None):
         # aapt2 understands a proto APK, while bundles put each module's manifest under manifest/.
         # Repack only the two metadata files, in memory/on disk as data, never extracting paths.
         modules = {}
-        if app and target == "android-mdc":
+        if app and target == "android-material":
             if not aapt2:
                 raise ValueError("aapt2 is required to compare Android metadata")
             for name in names:
@@ -185,7 +185,7 @@ def payload(path, metadata=None, target=None, aapt2=None, origins=None):
                 elif re.fullmatch(re.escape(roots[0]) + r"AppIcon[^/]*\.png", name):
                     normalized.append(name)
                     continue
-            elif app and target == "android-mdc":
+            elif app and target == "android-material":
                 module = name.split("/", 1)[0]
                 if module in modules and name == f"{module}/manifest/AndroidManifest.xml":
                     text = run_tool([aapt2, "dump", "xmltree", str(modules[module]),

@@ -682,7 +682,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
     # The id is the app's: whatever its manifest states, the stores accept, and no other
     # submission has claimed. Stating `id` / `android-id` pins it, so a build that changed the
     # record it publishes to fails here rather than at the store.
-    android = project.get("resolved", {}).get("android-mdc", {})
+    android = project.get("resolved", {}).get("android-material", {})
     built_ids = {"id": resolved_id, "android-id": android.get("id", "")}
 
     # The App Fair is the publisher of record for what it uploads, so every id a submission
@@ -690,7 +690,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
     # An app whose own builds go out under another id puts these in its flavor manifest
     # (`Day-<flavor>.toml`), which the queue reads.
     for field, value in built_ids.items():
-        if not value or (field == "android-id" and "android-mdc" not in app.data.get("distribution", {})):
+        if not value or (field == "android-id" and "android-material" not in app.data.get("distribution", {})):
             continue
         if not value.startswith(policy.id_namespace):
             bad(
@@ -699,7 +699,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
                 f"under in Day-{policy.flavor}.toml, which the queue builds through"
             )
     for field, resolve in (("id", published_id), ("android-id", published_android_id)):
-        if field == "android-id" and "android-mdc" not in app.data.get("distribution", {}):
+        if field == "android-id" and "android-material" not in app.data.get("distribution", {}):
             continue
         if app.data.get(field) is None:
             continue
@@ -1048,7 +1048,7 @@ def viewable(index: dict, site: dict | None) -> dict:
 
 
 STORE_LABELS = {"apple-app-store": "App Store", "google-play-store": "Google Play"}
-CHANNEL_TARGETS = {"apple-app-store": "ios-uikit", "google-play-store": "android-mdc"}
+CHANNEL_TARGETS = {"apple-app-store": "ios-uikit", "google-play-store": "android-material"}
 
 
 def capture_kind(target: str, device: object) -> str:
@@ -1056,7 +1056,7 @@ def capture_kind(target: str, device: object) -> str:
     platform is (`iphone`, `phone`), the way the day CLI reads it."""
     if device:
         return str(device)
-    return {"ios-uikit": "iphone", "android-mdc": "phone"}.get(target, "default")
+    return {"ios-uikit": "iphone", "android-material": "phone"}.get(target, "default")
 
 
 def listing_captures(index: dict, target: str, store: str) -> list[dict]:
@@ -2288,7 +2288,7 @@ def select_release(directory: Path, metadata: dict, target: str) -> Path:
     from package_compare import identity
     app = identity(metadata, target)
     stem = app.get("artifact") or metadata["project"]["artifact"]
-    ext = {"android-mdc": "aab", "ios-uikit": "ipa"}[target]
+    ext = {"android-material": "aab", "ios-uikit": "ipa"}[target]
     # `day pack --no-sign` names every package `-unsigned` (the iOS .ipa always did; Android
     # and HarmonyOS since 2026-09, when the shared workflow moved their signing after the build).
     suffixes = ["", "-unsigned"]
@@ -2370,7 +2370,7 @@ def cmd_audit(args: argparse.Namespace) -> int:
         bad(f"no manifest facts were read from the package ({facts.get('note', 'no reason given')})")
 
     # 2. It asks for nothing the manifest leaves undeclared.
-    platform = {"android-mdc": "android", "ios-uikit": "ios"}.get(args.target, "")
+    platform = {"android-material": "android", "ios-uikit": "ios"}.get(args.target, "")
     if platform:
         allowed = expected_permissions(metadata, platform, expected_id, policy_raw)
         for permission in facts.get("permissions", []):
@@ -2557,7 +2557,7 @@ commit: 026ae1d62a8c49b1b0793aed8b5a2a0064ba95b6
 distribution:
   ios-uikit:
     - apple-app-store
-  android-mdc:
+  android-material:
     - google-play-store
 """
 
@@ -2597,12 +2597,12 @@ CASES: list[tuple[str, str, str]] = [
     ),
     (
         "a channel under the wrong target",
-        "  android-mdc:\n    - google-play-store|  android-mdc:\n    - apple-app-store",
+        "  android-material:\n    - google-play-store|  android-material:\n    - apple-app-store",
         "takes a ios-uikit package",
     ),
     (
         "a target with no channel at all",
-        "  android-mdc:\n    - google-play-store|  android-mdc: []",
+        "  android-material:\n    - google-play-store|  android-material: []",
         "must list at least one channel",
     ),
     ("nowhere to publish", "distribution:|distributions:", "distribution is required"),
@@ -2842,7 +2842,7 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
     # The screenshots in the comment come from the release's index. A synthetic index stands in,
     # so this runs offline: its `listings` are derived from a test-only `store` position on each
     # entry, per platform and device kind, the way the day CLI resolves store/storefront.toml.
-    PLATFORMS = {"ios": "ios-uikit", "android": "android-mdc", "linux": "linux-gtk"}
+    PLATFORMS = {"ios": "ios-uikit", "android": "android-material", "linux": "linux-gtk"}
 
     def with_listings(index):
         per: dict = {}
@@ -2850,7 +2850,7 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
             pos = e.get("store")
             if not isinstance(pos, int) or pos < 1:
                 continue
-            store = CHANNEL_TARGETS and {"ios-uikit": "apple-app-store", "android-mdc": "google-play-store"}.get(e["platform"])
+            store = CHANNEL_TARGETS and {"ios-uikit": "apple-app-store", "android-material": "google-play-store"}.get(e["platform"])
             if not store:
                 continue
             kinds = per.setdefault(e["platform"], {"website": {}, "stores": {}})["stores"].setdefault(store, {})
@@ -2913,7 +2913,7 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
         shot("ios", "ipad", "light", "fr", "home", 2752, 2064, 1),
         shot("android", "phone", "light", "fr", "home", 1080, 1920, 1),
     ]})
-    taken = listing_captures(listing_index, "ios-uikit", "apple-app-store") + listing_captures(listing_index, "android-mdc", "google-play-store")
+    taken = listing_captures(listing_index, "ios-uikit", "apple-app-store") + listing_captures(listing_index, "android-material", "google-play-store")
     if len(taken) == 7 and all(s["theme"] == "light" and s["position"] == 1 for s in taken):
         print("ok   the listing takes the declared captures in the declared theme and no others")
     else:
@@ -3233,7 +3233,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--out", help="where to write the comparison")
     p.add_argument("--metadata", help="the queue flavor's day metadata JSON")
     p.add_argument("--reference-metadata", help="the base release's day metadata JSON")
-    p.add_argument("--target", choices=["android-mdc", "ios-uikit"])
+    p.add_argument("--target", choices=["android-material", "ios-uikit"])
 
     p.add_argument(
         "--allow-mismatch",
@@ -3245,7 +3245,7 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("select-release", help="select the base app's release package unambiguously")
     p.add_argument("--directory", required=True)
     p.add_argument("--metadata", required=True)
-    p.add_argument("--target", required=True, choices=["android-mdc", "ios-uikit"])
+    p.add_argument("--target", required=True, choices=["android-material", "ios-uikit"])
     p.set_defaults(func=cmd_select_release)
 
     p = sub.add_parser("audit", help="hold a package against the submission and the manifest")

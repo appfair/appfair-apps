@@ -179,7 +179,7 @@ def main(argv=None) -> int:
     parser.add_argument("--package", help="the Play package name, or read it from --metadata")
     parser.add_argument("--version-code", help="the version code, such as 36")
     parser.add_argument("--metadata", help="`day metadata --json`, to take the code from")
-    parser.add_argument("--target", default="android-mdc", help="the target `--metadata` resolves")
+    parser.add_argument("--target", default="android-material", help="the target `--metadata` resolves")
     parser.add_argument("--track", default="production", help="the track the lane published to")
     parser.add_argument("--expect", choices=["submitted", "uploaded"])
     parser.add_argument(

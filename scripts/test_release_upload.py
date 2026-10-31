@@ -117,14 +117,14 @@ class ReleaseUploadTests(unittest.TestCase):
         """The directory holds this run's build and nothing else, so selection is by format. The
         maintainer's assets are protected by the release, not by a naming convention."""
         self.packages(
-            "games-fair-appfair-android-mdc.aab",
-            "fair-games-android-mdc.apk",
-            "games-fair-appfair-android-mdc.aab.buildinfo.json",
-            "pack-android-mdc.json",
+            "games-fair-appfair-android-material.aab",
+            "fair-games-android-material.apk",
+            "games-fair-appfair-android-material.aab.buildinfo.json",
+            "pack-android-material.json",
         )
         self.assertEqual(
             [p.name for p in ru.attachable(self.dir)],
-            ["fair-games-android-mdc.apk", "games-fair-appfair-android-mdc.aab"],
+            ["fair-games-android-material.apk", "games-fair-appfair-android-material.aab"],
         )
 
     def test_a_signed_ipa_loses_the_unsigned_marker(self):
@@ -132,7 +132,7 @@ class ReleaseUploadTests(unittest.TestCase):
             ru.published_name("games-fair-appfair-ios-uikit-unsigned.ipa"),
             "games-fair-appfair-ios-uikit.ipa",
         )
-        self.assertEqual(ru.published_name("games-fair-appfair-android-mdc.aab"), "games-fair-appfair-android-mdc.aab")
+        self.assertEqual(ru.published_name("games-fair-appfair-android-material.aab"), "games-fair-appfair-android-material.aab")
 
     # --- check ---------------------------------------------------------------------------
 
@@ -247,7 +247,7 @@ class ReleaseUploadTests(unittest.TestCase):
 
     def test_the_app_replaces_its_own_assets(self):
         """Uploaded as <app>[bot], so that is the login the rail recognizes."""
-        name = "games-fair-appfair-android-mdc.aab"
+        name = "games-fair-appfair-android-material.aab"
         mine = {"id": 7, "assets": [{"id": 11, "name": name, "uploader": {"login": f"{APP}[bot]"}}]}
         fake = self.with_app(release=mine)
         self.packages(name)
@@ -262,7 +262,7 @@ class ReleaseUploadTests(unittest.TestCase):
 
     def test_the_packages_are_posted_to_the_release(self):
         fake = self.github()
-        self.packages("games-fair-appfair-android-mdc.aab", "games-fair-appfair-ios-uikit-unsigned.ipa")
+        self.packages("games-fair-appfair-android-material.aab", "games-fair-appfair-ios-uikit-unsigned.ipa")
         code, output = self.run_cli(
             "upload", "--repo", "Games-Fair/Games-Fair", "--tag", "v2.1.1",
             "--dir", str(self.dir),
@@ -274,11 +274,11 @@ class ReleaseUploadTests(unittest.TestCase):
             if method == "POST" and "/releases/" in url
         ]
         self.assertEqual(
-            posted, ["games-fair-appfair-android-mdc.aab", "games-fair-appfair-ios-uikit.ipa"]
+            posted, ["games-fair-appfair-android-material.aab", "games-fair-appfair-ios-uikit.ipa"]
         )
 
     def test_the_catalog_replaces_its_own_asset_and_no_one_else_s(self):
-        name = "games-fair-appfair-android-mdc.aab"
+        name = "games-fair-appfair-android-material.aab"
         mine = {"id": 7, "assets": [{"id": 11, "name": name, "uploader": {"login": f"{APP}[bot]"}}]}
         fake = self.github(release=mine)
         self.packages(name)
@@ -300,7 +300,7 @@ class ReleaseUploadTests(unittest.TestCase):
     def test_an_app_that_installed_nothing_keeps_its_packages_and_the_run_carries_on(self):
         """The artifact is already uploaded by the time this runs, and the message says so."""
         fake = self.with_app(installed=False)
-        self.packages("games-fair-appfair-android-mdc.aab")
+        self.packages("games-fair-appfair-android-material.aab")
         code, output = self.run_cli(
             "upload", "--repo", "Games-Fair/Games-Fair", "--tag", "v2.1.1",
             "--dir", str(self.dir),
@@ -315,7 +315,7 @@ class ReleaseUploadTests(unittest.TestCase):
     def test_a_pre_release_becomes_the_latest_once_every_package_is_on_it(self):
         """`releases/latest/download/<name>` answers only for the latest release."""
         fake = self.github(release={"id": 7, "assets": [], "prerelease": True})
-        self.packages("games-fair-appfair-android-mdc.apk")
+        self.packages("games-fair-appfair-android-material.apk")
         code, output = self.run_cli(
             "upload", "--repo", "Games-Fair/Games-Fair", "--tag", "v2.1.1",
             "--dir", str(self.dir),
@@ -328,7 +328,7 @@ class ReleaseUploadTests(unittest.TestCase):
 
     def test_a_release_that_is_already_public_is_left_as_it_is(self):
         fake = self.github(release={"id": 7, "assets": [], "prerelease": False})
-        self.packages("games-fair-appfair-android-mdc.apk")
+        self.packages("games-fair-appfair-android-material.apk")
         code, _ = self.run_cli(
             "upload", "--repo", "Games-Fair/Games-Fair", "--tag", "v2.1.1",
             "--dir", str(self.dir),
@@ -338,7 +338,7 @@ class ReleaseUploadTests(unittest.TestCase):
 
     def test_a_dry_run_changes_nothing(self):
         fake = self.github(release={"id": 7, "assets": [], "prerelease": True})
-        self.packages("games-fair-appfair-android-mdc.apk")
+        self.packages("games-fair-appfair-android-material.apk")
         code, output = self.run_cli(
             "upload", "--repo", "Games-Fair/Games-Fair", "--tag", "v2.1.1", "--dir", str(self.dir),
             "--dry-run",
@@ -357,9 +357,9 @@ class ReleaseUploadTests(unittest.TestCase):
     def test_staging_gathers_the_packages_under_their_published_names(self):
         """Every run leaves this directory as an artifact, uploaded or not."""
         self.packages(
-            "games-fair-appfair-android-mdc.apk",
+            "games-fair-appfair-android-material.apk",
             "games-fair-appfair-ios-uikit-unsigned.ipa",
-            "games-fair-appfair-android-mdc.apk.buildinfo.json",
+            "games-fair-appfair-android-material.apk.buildinfo.json",
         )
         out = self.dir / "staged"
         code, output = self.run_cli("stage", "--dir", str(self.dir), "--out", str(out))
@@ -368,13 +368,13 @@ class ReleaseUploadTests(unittest.TestCase):
         # unsigned build and is not one.
         self.assertEqual(
             sorted(p.name for p in out.iterdir()),
-            ["games-fair-appfair-android-mdc.apk", "games-fair-appfair-ios-uikit.ipa"],
+            ["games-fair-appfair-android-material.apk", "games-fair-appfair-ios-uikit.ipa"],
         )
 
     def test_a_name_the_app_already_published_is_refused_with_what_to_change(self):
         """The rail that matters. An app whose flavor names its own artifact can produce the same
         names as its own build; the catalog refuses those rather than replacing them."""
-        name = "games-fair-android-mdc.aab"
+        name = "games-fair-android-material.aab"
         theirs = {"id": 7, "prerelease": False,
                   "assets": [{"id": 11, "name": name, "uploader": {"login": "the-maintainer"}}]}
         fake = self.with_app(release=theirs)
@@ -390,7 +390,7 @@ class ReleaseUploadTests(unittest.TestCase):
     def test_a_pre_release_is_promoted_even_when_nothing_could_be_attached(self):
         """The catalog published this version; tying the promotion to the attachment would leave
         a staged release pre-release for good, with releases/latest stuck behind it."""
-        name = "games-fair-android-mdc.aab"
+        name = "games-fair-android-material.aab"
         theirs = {"id": 7, "prerelease": True,
                   "assets": [{"id": 11, "name": name, "uploader": {"login": "the-maintainer"}}]}
         fake = self.with_app(release=theirs)
@@ -403,7 +403,7 @@ class ReleaseUploadTests(unittest.TestCase):
 
     def test_a_run_that_cannot_write_says_the_release_stays_a_pre_release(self):
         self.with_app(installed=False)
-        self.packages("games-fair-appfair-android-mdc.aab")
+        self.packages("games-fair-appfair-android-material.aab")
         code, output = self.run_cli(
             "upload", "--repo", "Games-Fair/Games-Fair", "--tag", "v2.1.1", "--dir", str(self.dir)
         )

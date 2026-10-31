@@ -17,7 +17,7 @@ inputs:
     description: The tag being published.
     required: true
   target:
-    description: The Day target whose package this is, ios-uikit or android-mdc.
+    description: The Day target whose package this is, ios-uikit or android-material.
     required: true
   channel:
     description: >-
@@ -220,7 +220,7 @@ runs:
       run: |
         set -euo pipefail
         case "${{ inputs.target }}" in
-          android-mdc) package=$(ls "${{ inputs.packages }}"/*.aab | head -1) ;;
+          android-material) package=$(ls "${{ inputs.packages }}"/*.aab | head -1) ;;
           ios-uikit)   package=$(ls "${{ inputs.packages }}"/*.ipa | head -1) ;;
           *) echo "::error::unknown target ${{ inputs.target }}"; exit 1 ;;
         esac
@@ -236,7 +236,7 @@ runs:
     # dayapp.yml workflow, so the two pipelines sign one way.
     - name: List the .apk beside the .aab
       id: apks
-      if: inputs.target == 'android-mdc'
+      if: inputs.target == 'android-material'
       shell: bash
       run: |
         set -euo pipefail

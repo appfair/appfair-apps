@@ -116,7 +116,7 @@ runs:
       run: |
         set -euo pipefail
         case "${{ inputs.target }}" in
-          android-mdc) primary=$(ls "${{ inputs.packages }}"/*.aab | head -1)
+          android-material) primary=$(ls "${{ inputs.packages }}"/*.aab | head -1)
                        sibling=$(ls "${{ inputs.packages }}"/*.apk 2>/dev/null | head -1 || true) ;;
           ios-uikit)   primary=$(ls "${{ inputs.packages }}"/*.ipa | head -1)
                        sibling="" ;;

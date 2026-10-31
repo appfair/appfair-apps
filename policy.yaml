@@ -38,7 +38,7 @@ channels:
     options: [submit, profile-secret]
     status: ready
   google-play-store:
-    target: android-mdc
+    target: android-material
     lane: android release
     hold-lane: android upload
     options: [submit]
@@ -50,11 +50,11 @@ channels:
     options: [submit]
     status: planned
   f-droid:
-    target: android-mdc
+    target: android-material
     options: []
     status: planned
   samsung-galaxy-store:
-    target: android-mdc
+    target: android-material
     options: [submit]
     status: planned
 
@@ -69,7 +69,7 @@ channels:
 # the floor daybrite/actions builds on.
 runners:
   ios-uikit: xcode-27
-  android-mdc: ubuntu-latest
+  android-material: ubuntu-latest
 
 # Which day CLI builds every submission. `main` tracks the framework; a released version pins it.
 day-version: main
@@ -160,7 +160,7 @@ screenshots:
 # --- The maintainer's release ----------------------------------------------------------------
 # The packages this queue signs are attached to the release the submission names, beside the ones
 # the maintainer published. They carry the build flavor in their names
-# (`games-fair-appfair-android-mdc.aab`), so nothing of the maintainer's is replaced.
+# (`games-fair-appfair-android-material.aab`), so nothing of the maintainer's is replaced.
 #
 # It takes write access to the app's repository, granted to the account below. An app that has
 # granted nothing still publishes: `on-missing-access: warn` leaves the signed packages as a

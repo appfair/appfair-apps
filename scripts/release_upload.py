@@ -5,8 +5,8 @@ The App Fair builds an app from its released tag, signs it with the catalog's ke
 it to the stores. These commands put the same signed packages on the app's own release, beside
 the ones the maintainer published, named with the build flavor:
 
-    games-fair-android-mdc.aab           the maintainer's, untouched
-    games-fair-appfair-android-mdc.aab   the App Fair's, attached by `upload`
+    games-fair-android-material.aab           the maintainer's, untouched
+    games-fair-appfair-android-material.aab   the App Fair's, attached by `upload`
 
     release_upload.py check  --repo Games-Fair/Games-Fair [--tag v2.1.1]
     release_upload.py stage  --dir packages --out release-assets
