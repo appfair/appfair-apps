@@ -251,7 +251,7 @@ def cmd_check(args: argparse.Namespace) -> int:
     return 0
 
 
-def attachable(directory: Path) -> list[Path]:
+def attachable(directory: Path, every_file: bool = False) -> list[Path]:
     """The packages in `directory`, which holds this run's build and nothing else.
 
     Selection is by format alone. What keeps the catalog off the maintainer's assets is the
@@ -262,7 +262,7 @@ def attachable(directory: Path) -> list[Path]:
     return [
         path
         for path in sorted(p for p in directory.iterdir() if p.is_file())
-        if path.suffix.lower() in PACKAGES
+        if every_file or path.suffix.lower() in PACKAGES
     ]
 
 
@@ -316,7 +316,9 @@ def cmd_upload(args: argparse.Namespace) -> int:
     if not directory.is_dir():
         emit("error", f"{directory} is not a directory, so there are no packages to attach")
         return 1
-    found = attachable(directory)
+    # adp.yml attaches an alternative distribution package: manifest.json and signature beside
+    # the .ipa variants, all of which iOS needs.
+    found = attachable(directory, getattr(args, "all_files", False))
 
     cred, severity, why = resolve(args)
     allowed, message = writable(args.repo, cred, why)
@@ -387,7 +389,9 @@ def cmd_upload(args: argparse.Namespace) -> int:
     # Whatever came of the attachment, this version is the one the catalog published, so a
     # release still marked pre-release becomes the current one. Tying this to a successful
     # attachment would leave a staged release pre-release for good.
-    if policy().get("promote-prerelease", True):
+    # Not for the iOS marketplace's packages, which arrive whenever Apple notarizes a version: the
+    # store lanes decide when a release is the current one.
+    if policy().get("promote-prerelease", True) and not getattr(args, "no_promote", False):
         promote(args.repo, args.tag, cred.token, body, args.dry_run)
 
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
@@ -424,6 +428,12 @@ def main(argv: list[str] | None = None) -> int:
     upload.add_argument("--tag", required=True, help="the released tag they belong to")
     upload.add_argument("--dir", default="release-assets", help="the directory holding them")
     upload.add_argument("--dry-run", action="store_true", help="say what would be attached")
+    upload.add_argument(
+        "--all-files", action="store_true", help="attach every file in --dir, not only packages"
+    )
+    upload.add_argument(
+        "--no-promote", action="store_true", help="leave a pre-release a pre-release"
+    )
     upload.set_defaults(func=cmd_upload)
 
     args = parser.parse_args(argv)

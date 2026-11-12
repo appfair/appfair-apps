@@ -193,12 +193,25 @@ class FlowTests(unittest.TestCase):
         self.assertLess(names.index("Merge this pull request"), names.index("Record the publication"))
 
     def test_only_the_job_that_needs_keys_is_in_the_environment(self):
-        """Stage A runs the app's code, so the environment must not reach it. One job holds the
-        store keys and the app's private key, and it is the only one: a second job in the same
-        environment would ask the reviewer to approve again, for work they already released."""
+        """Stage A runs the app's code, so the environment must not reach it. One job per release
+        holds the store keys and the app's private key: a second job in the same environment would
+        ask the reviewer to approve again, for work they already released. The iOS marketplace's
+        lane (adp.yml) is the other: a separate event, when Apple notarizes a version, whose job
+        attaches Apple's packages with the app's private key and runs no app code."""
         gated = {(name, job) for name, workflow in WORKFLOWS.items()
                  for job, spec in workflow["jobs"].items() if "environment" in spec}
-        self.assertEqual(gated, {("submit", "publish")})
+        self.assertEqual(gated, {("submit", "publish"), ("adp", "publish")})
+
+    def test_the_marketplace_lane_runs_no_app_code(self):
+        """adp.yml holds the app's private key, so it checks out this repository alone and runs
+        only this repository's scripts."""
+        steps = WORKFLOWS["adp"]["jobs"]["publish"]["steps"]
+        for step in steps:
+            if str(step.get("uses", "")).startswith("actions/checkout"):
+                self.assertNotIn("repository", step.get("with") or {}, step)
+            run = step.get("run", "")
+            if run:
+                self.assertTrue(run.lstrip().startswith("python3 scripts/"), run)
 
     def test_the_app_key_is_read_only_inside_the_environment(self):
         """A repository secret is readable by any workflow here, including one on a branch."""

@@ -1,0 +1,28 @@
+# The apps App Fair distributes as an iOS alternative app marketplace, by Apple item id (the app's
+# "Apple ID" in App Store Connect), with the repository whose releases carry their packages.
+#
+# When App Store Connect has a notarized version ready, the appfair.cloud marketplace ingests it
+# and sends `adp-available` here; adp.yml attaches the package's files to the release of
+# `repository` whose tag names that version (`v1.2.3` or `1.2.3`). Only apps listed here are
+# published, and only when the package's bundle id matches.
+#
+# An app gets here by choosing App Fair as a marketplace in App Store Connect (Users and Access →
+# Integrations → Marketplace, with the token App Fair issues), and a line below.
+
+apps:
+  "1640618584":
+    title: Net Skip
+    repository: Net-Skip/Net-Skip
+    bundle-id: org.appfair.app.Net-Skip
+  "6832401867":
+    title: Fleet Reader
+    repository: Fleet-Reader/Fleet-Reader
+    bundle-id: org.appfair.app.FleetReader
+  "6761661340":
+    title: Games Fair
+    repository: Games-Fair/Games-Fair
+    bundle-id: org.appfair.app.Faire-Games
+  "1639831676":
+    title: Stanza Redux
+    repository: Stanza-Redux/Stanza-Redux
+    bundle-id: org.appfair.app.Stanza-Redux

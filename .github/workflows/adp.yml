@@ -1,0 +1,77 @@
+# The iOS marketplace's packages, attached to each app's own release (scripts/adp_publish.py).
+#
+# appfair.cloud sends `adp-available` when Apple has notarized a version of an app that lists App
+# Fair as its marketplace: the package zip and each variant's and delta's download URL, all
+# short-lived, none secret (the key blobs stay with the marketplace). This attaches the files to
+# the release of the repository marketplace.yaml names, with the App Fair Publisher's token, then
+# tells the marketplace, which starts redirecting iOS's downloads to them.
+#
+# The Publisher's key is a secret of the `store` environment, so its reviewers release each run.
+#
+# Run by hand (workflow_dispatch) with a package version id to have the marketplace take that
+# version in again, for one notarized before the webhook existed or whose URLs expired.
+name: adp
+
+on:
+  repository_dispatch:
+    types: [adp-available]
+  workflow_dispatch:
+    inputs:
+      version-id:
+        description: An alternative distribution package version id to ingest again
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: adp-${{ github.event.client_payload.adp.appleItemId || inputs.version-id }}
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    name: ask the marketplace to ingest ${{ inputs.version-id }}
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: Ingest
+        env:
+          VERSION_ID: ${{ inputs.version-id }}
+        run: python3 scripts/adp_publish.py ingest --version-id "$VERSION_ID"
+
+  publish:
+    name: publish ${{ github.event.client_payload.adp.bundleId }} ${{ github.event.client_payload.adp.shortVersion }}
+    if: ${{ github.event_name == 'repository_dispatch' }}
+    runs-on: ubuntu-latest
+    environment: store
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: Find the repository and release
+        id: plan
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/adp_publish.py plan --event "$GITHUB_EVENT_PATH"
+      - name: Download and check the package
+        run: python3 scripts/adp_publish.py fetch --event "$GITHUB_EVENT_PATH" --out adp
+      - name: Attach it to the release
+        env:
+          # The App Fair Publisher signs for itself and mints a token for that repository alone.
+          APPFAIR_APP_PRIVATE_KEY: ${{ secrets.APPFAIR_APP_PRIVATE_KEY }}
+          REPO: ${{ steps.plan.outputs.repo }}
+          TAG: ${{ steps.plan.outputs.tag }}
+        run: |
+          python3 scripts/release_upload.py upload --repo "$REPO" --tag "$TAG" --dir adp \
+            --all-files --no-promote --missing-access error
+      - name: Tell the marketplace
+        env:
+          REPO: ${{ steps.plan.outputs.repo }}
+          TAG: ${{ steps.plan.outputs.tag }}
+        run: python3 scripts/adp_publish.py notify --event "$GITHUB_EVENT_PATH" --repo "$REPO" --tag "$TAG"
