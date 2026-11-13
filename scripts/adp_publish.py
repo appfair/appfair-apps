@@ -14,9 +14,10 @@ itself; nothing here is secret. adp.yml then:
 and the marketplace starts redirecting iOS's downloads to the release assets. `ingest` asks the
 marketplace to take a version in again, which sends a fresh `adp-available` here.
 
-Every file is published as `adp-<appleVersionId>-<path with / as ->`, the name the marketplace
-expects (appfair.cloud/api/src/ingest.ts), and manifest.json and signature byte for byte: iOS
-verifies the manifest against Apple's signature.
+Every file is published as `x-adp-<appleVersionId>-<path with / as ->`, the name the marketplace
+expects (appfair.cloud/api/src/ingest.ts); the `x-` sorts them after the app's own release
+assets. manifest.json and signature are published byte for byte: iOS verifies the manifest against
+Apple's signature.
 """
 
 from __future__ import annotations
@@ -120,9 +121,13 @@ def cmd_plan(args: argparse.Namespace, get=http) -> int:
     return 0
 
 
+#: What every package file's release asset name starts with, before the package version id.
+PREFIX = "x-adp"
+
+
 def asset_path(version: str, name: str) -> str:
-    """`adp-<version>-variant-<id>.ipa` → `variant/<id>.ipa`, the path the manifest uses."""
-    rest = name[len(f"adp-{version}-"):]
+    """`x-adp-<version>-variant-<id>.ipa` → `variant/<id>.ipa`, the path the manifest uses."""
+    rest = name[len(f"{PREFIX}-{version}-"):]
     for folder in ("variant-", "delta-"):
         if rest.startswith(folder):
             return f"{folder[:-1]}/{rest[len(folder):]}"
@@ -161,7 +166,7 @@ def cmd_fetch(args: argparse.Namespace, get=http) -> int:
     checks = expected(manifest)
     for f in adp["files"]:
         name, source = f["name"], f["source"]
-        if "/" in name or not name.startswith(f"adp-{version}-"):
+        if "/" in name or not name.startswith(f"{PREFIX}-{version}-"):
             emit("error", f"refusing the asset name {name}")
             return 1
         if source.startswith("zip:"):

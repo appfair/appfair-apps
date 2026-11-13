@@ -61,9 +61,9 @@ def event(dir_: Path, **over) -> str:
         "bundleVersion": "240",
         "zip": "https://cdn/adp.zip",
         "files": [
-            {"name": f"adp-{VERSION}-manifest.json", "source": "zip:manifest.json"},
-            {"name": f"adp-{VERSION}-signature", "source": "zip:signature"},
-            {"name": f"adp-{VERSION}-variant-v1.ipa", "source": "https://cdn/v1.ipa"},
+            {"name": f"x-adp-{VERSION}-manifest.json", "source": "zip:manifest.json"},
+            {"name": f"x-adp-{VERSION}-signature", "source": "zip:signature"},
+            {"name": f"x-adp-{VERSION}-variant-v1.ipa", "source": "https://cdn/v1.ipa"},
         ],
         **over,
     }
@@ -113,9 +113,9 @@ class FetchTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             out = Path(d) / "adp"
             self.assertEqual(ap.cmd_fetch(Namespace(event=event(Path(d)), out=str(out)), get), 0)
-            self.assertEqual((out / f"adp-{VERSION}-manifest.json").read_bytes(), man)
-            self.assertEqual((out / f"adp-{VERSION}-signature").read_bytes(), b"SIG")
-            self.assertEqual((out / f"adp-{VERSION}-variant-v1.ipa").read_bytes(), IPA)
+            self.assertEqual((out / f"x-adp-{VERSION}-manifest.json").read_bytes(), man)
+            self.assertEqual((out / f"x-adp-{VERSION}-signature").read_bytes(), b"SIG")
+            self.assertEqual((out / f"x-adp-{VERSION}-variant-v1.ipa").read_bytes(), IPA)
 
     def test_refuses_a_variant_of_the_wrong_size(self):
         get = Recorder({"https://cdn/adp.zip": (200, zip_bytes(manifest(size=999))), "https://cdn/v1.ipa": (200, IPA)})
@@ -135,9 +135,9 @@ class FetchTests(unittest.TestCase):
             self.assertEqual(ap.cmd_fetch(Namespace(event=ev, out=f"{d}/adp"), get), 1)
 
     def test_asset_names_map_back_to_manifest_paths(self):
-        self.assertEqual(ap.asset_path(VERSION, f"adp-{VERSION}-variant-v1.ipa"), "variant/v1.ipa")
-        self.assertEqual(ap.asset_path(VERSION, f"adp-{VERSION}-delta-d1.ipa"), "delta/d1.ipa")
-        self.assertEqual(ap.asset_path(VERSION, f"adp-{VERSION}-manifest.json"), "manifest.json")
+        self.assertEqual(ap.asset_path(VERSION, f"x-adp-{VERSION}-variant-v1.ipa"), "variant/v1.ipa")
+        self.assertEqual(ap.asset_path(VERSION, f"x-adp-{VERSION}-delta-d1.ipa"), "delta/d1.ipa")
+        self.assertEqual(ap.asset_path(VERSION, f"x-adp-{VERSION}-manifest.json"), "manifest.json")
 
 
 class NotifyTests(unittest.TestCase):

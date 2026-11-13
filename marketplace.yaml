@@ -8,6 +8,11 @@
 #
 # An app gets here by choosing App Fair as a marketplace in App Store Connect (Users and Access →
 # Integrations → Marketplace, with the token App Fair issues), and a line below.
+#
+# `altstore: true` also lists the app in App Fair's AltStore source (https://appfair.net/altstore.json),
+# which appfair.net's build writes from the marketplace's catalog: AltStore PAL installs the same
+# package from the same release assets. The app has to list AltStore PAL as a marketplace in App
+# Store Connect as well.
 
 apps:
   "1640618584":
@@ -22,6 +27,7 @@ apps:
     title: Games Fair
     repository: Games-Fair/Games-Fair
     bundle-id: org.appfair.app.Faire-Games
+    altstore: true
   "1639831676":
     title: Stanza Redux
     repository: Stanza-Redux/Stanza-Redux
