@@ -196,6 +196,9 @@ jobs:
           sparse-checkout: ${{ steps.paths.outputs.sparse }}
           sparse-checkout-cone-mode: false
           persist-credentials: false
+      # The day CLI is built from source when no run has cached this commit's yet, and it needs a
+      # newer Rust than the runner image carries. The build job installs the same toolchain.
+      - uses: dtolnay/rust-toolchain@stable
       - uses: daybrite/actions/.github/actions/setup-day-cli@v1
         with:
           version: ${{ matrix.day_version }}
