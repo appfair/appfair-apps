@@ -12,6 +12,18 @@
       "tag": "v2.0.2",
       "title": "Fair Games"
     },
+    "Fleet-Reader": {
+      "channels": [
+        "apple-app-store",
+        "google-play-store"
+      ],
+      "id": "org.appfair.app.Fleet-Reader",
+      "published": "2026-11-19T07:16:33Z",
+      "repo": "https://github.com/Fleet-Reader/Fleet-Reader",
+      "run": "https://github.com/appfair/appfair-apps/actions/runs/44475460285",
+      "tag": "v0.3.2",
+      "title": "Fleet Reader"
+    },
     "Games-Fair": {
       "channels": [
         "apple-app-store",
@@ -37,5 +49,5 @@
       "title": "Stanza Redux"
     }
   },
-  "updated": "2026-11-19T01:45:13Z"
+  "updated": "2026-11-19T07:16:33Z"
 }
