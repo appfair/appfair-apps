@@ -1062,8 +1062,8 @@ def capture_kind(target: str, device: object) -> str:
 def listing_captures(index: dict, target: str, store: str) -> list[dict]:
     """The captures `store`'s listing shows for `target`, from the index's `listings` (what
     `day screenshot index` resolved from the app's store/storefront.toml [storefront]): per device
-    kind and locale, the declared shots in order, in the declared theme (a capture with no
-    theme is taken). Each carries `position`, `kind` and `store`."""
+    kind and locale, one capture per declared shot, preferring the declared theme and falling
+    back to an unthemed capture. Each carries `position`, `kind` and `store`."""
     kinds = (((index.get("listings") or {}).get(target) or {}).get("stores") or {}).get(store) or {}
     out = []
     for kind, by_locale in kinds.items():
@@ -1071,14 +1071,25 @@ def listing_captures(index: dict, target: str, store: str) -> list[dict]:
             for i, want in enumerate(wanted or []):
                 if not isinstance(want, dict):
                     continue
+                theme = want.get("theme") or "light"
+                fallback = None
+                selected = None
                 for e in index.get("screenshots") or []:
                     if e.get("platform") != target or e.get("shot") != want.get("shot"):
                         continue
                     if capture_kind(target, e.get("device")) != kind or e.get("locale") != locale:
                         continue
-                    if e.get("theme") not in (None, want.get("theme") or "light"):
-                        continue
-                    out.append({**e, "position": i + 1, "kind": kind, "store": store})
+                    # Behavioral scripts can capture the walkthrough's shot name without a
+                    # theme. Match Day's staging: prefer the requested theme, never both.
+                    if e.get("theme") == theme:
+                        selected = e
+                        break
+                    if e.get("theme") is None and fallback is None:
+                        fallback = e
+                if selected is None:
+                    selected = fallback
+                if selected is not None:
+                    out.append({**selected, "position": i + 1, "kind": kind, "store": store})
     return sorted(out, key=lambda s: (s["store"], s["kind"], str(s.get("locale")), s["position"]))
 
 
@@ -1166,7 +1177,7 @@ def screenshot_problems(app: "App", index: dict, policy_raw: dict, path: str) ->
                 limit = int(rule.get("max") or 0)
                 for locale, n in sorted(per_locale.items()):
                     if limit and n > limit:
-                        problems.append(Problem(path, f"{channel}: {n} {kind} screenshots for {locale}, and the store takes at most {limit}; lower the `store:` marks in the walkthrough to {limit}"))
+                        problems.append(Problem(path, f"{channel}: {n} {kind} screenshots for {locale}, and the store takes at most {limit}; shorten the list in [storefront.{target}.{channel}.screenshots] to {limit}"))
                 if rule.get("required"):
                     missing = [l for l in index_locales if l not in per_locale]
                     if not mine:
