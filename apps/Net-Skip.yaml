@@ -1,0 +1,22 @@
+# yaml-language-server: $schema=../schema/app.schema.json
+#
+# Net Skip in the App Fair catalog. The file is named for the app token, which is where the app
+# lives: https://github.com/Net-Skip/Net-Skip
+#
+# To publish a new version, change the tag and the commit below in a pull request. The rest is
+# read from the app's repository at that commit.
+
+token: Net-Skip
+title: Net Skip
+tag: v2.1.0
+# The commit that tag points at. Since a tag can be moved afterwards, this is what every stage
+# checks out. `scripts/queue.py update Net-Skip` rewrites both lines.
+commit: e4cbba66dd79913fd72940e48dbe4ef6acdee667
+
+# Where this app goes, keyed by the target that builds for it. policy.yaml lists the channels the
+# queue can publish to. Drop a line to keep the app off a channel.
+distribution:
+  android-material:
+    - google-play-store
+  ios-uikit:
+    - apple-app-store
