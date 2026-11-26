@@ -54,15 +54,15 @@ PLATFORM_KEYS = {
     "apple": ["ios", "macos", "ios-uikit", "macos-appkit", "macos-gtk", "macos-qt"],
 }
 
-# Source notices name the applicable license, not a catalog-wide license. This is a presence
-# check, not an SPDX expression parser or a determination of DFSG compliance.
+# Third-party files keep their own SPDX expressions.
 SPDX_NOTICE = re.compile(r"^\s*//\s*SPDX-License-Identifier:\s*(\S.*?)\s*$")
+APP_LICENSE = "GPL-2.0-or-later"
+REFERENCE = Path(__file__).resolve().parent / "reference" / "LICENSE.txt"
 LICENSE_PATTERNS = ("LICENSE", "LICENSE.*", "LICENSE-*", "COPYING", "COPYING.*", "COPYING-*", "LICENSES/*.txt")
 LICENSE_REVIEW_NOTE = (
-    "License review required: verify publicly available source under DFSG-compliant licenses "
-    "for the app and all direct and transitive dependencies, compatible distribution terms, "
-    "and evidence that every binary dependency (including Maven JARs) can be reproduced from "
-    "its available source. License files and SPDX notices alone do not establish compliance. "
+    "Verify the rights holders grant the app license. Check public "
+    "source, DFSG compliance and compatible terms for all direct and transitive dependencies. "
+    "Verify that each binary dependency can be reproduced from its corresponding source. "
     "See https://appfair.org/docs/inclusion-criteria/#license-and-dependencies"
 )
 # How far in the notice may sit, so a shebang or an attribute can precede it.
@@ -188,28 +188,26 @@ def flavor_manifest(project: Project) -> Iterable[Finding]:
     )
 
 
-def license_files(project: Project) -> list[Path]:
+def additional_license_files(project: Project) -> list[Path]:
     return sorted({
         path for pattern in LICENSE_PATTERNS for path in project.root.glob(pattern)
-        if path.is_file() and path.name != "LICENSE-EXCEPTIONS.txt"
+        if path.is_file() and path != project.path("LICENSE.txt")
     })
 
 
-@rule("license", "The app includes license texts for review under the DFSG policy")
+@rule("license", "The app declares GPL version 2 or later")
 def license_text(project: Project) -> Iterable[Finding]:
-    """Check documentation exists; reviewers assess the actual terms and dependency sources."""
     if LICENSE_REVIEW_NOTE not in project.notes:
         project.notes.append(LICENSE_REVIEW_NOTE)
-    paths = license_files(project)
-    if not paths:
+    expected = REFERENCE.read_text(encoding="utf-8")
+    actual = project.read(project.path("LICENSE.txt"))
+    if actual is None or actual.split() != expected.split():
         yield Finding(
-            "license",
-            "No license text was found for the app",
-            "include the applicable DFSG-compliant license text in LICENSE, COPYING, "
-            "a LICENSE/COPYING file with an extension or suffix, or LICENSES/*.txt; "
-            "retain required notices and provide dependency source and binary rebuild evidence",
+            "license", "LICENSE.txt must contain the complete GPL version 2 text",
+            "copy LICENSE.txt from the appfair-lint action’s reference directory",
+            path="LICENSE.txt",
         )
-    for path in paths:
+    for path in additional_license_files(project):
         text = project.read(path)
         if text is None or not text.strip():
             yield Finding(
@@ -218,6 +216,41 @@ def license_text(project: Project) -> Iterable[Finding]:
                 "include the complete applicable license text for review",
                 path=project.rel(path),
             )
+
+    # The GPL text alone cannot distinguish version 2 only from version 2 or later.
+    manifest = project.path("Cargo.toml")
+    if manifest.exists():
+        try:
+            with manifest.open("rb") as file:
+                cargo = tomllib.load(file)
+        except (OSError, UnicodeError, tomllib.TOMLDecodeError) as error:
+            yield Finding("license", f"Cannot read Cargo.toml: {error}", "provide valid UTF-8 TOML", path="Cargo.toml")
+            return
+        declared = cargo.get("package", {}).get("license")
+        if declared == {"workspace": True}:
+            declared = cargo.get("workspace", {}).get("package", {}).get("license", "")
+        if declared is not None:
+            if declared != APP_LICENSE:
+                yield Finding(
+                    "license", f"The app package declares {declared!r}",
+                    f'declare license = "{APP_LICENSE}" for the app package',
+                    path="Cargo.toml",
+                )
+            return
+
+    # Existing Day apps can declare the app's terms in a crate root instead of the manifest.
+    for name in ("src/lib.rs", "src/main.rs"):
+        source = project.read(project.path(name)) or ""
+        for line in source.splitlines()[:SPDX_WITHIN]:
+            notice = SPDX_NOTICE.fullmatch(line)
+            if notice and notice.group(1) == APP_LICENSE:
+                return
+    yield Finding(
+        "license", "The app has no declaration of the required license",
+        f'declare license = "{APP_LICENSE}" in the app’s [package] section or use that '
+        "identifier in the SPDX notice in src/lib.rs or src/main.rs",
+        path="Cargo.toml",
+    )
 
 
 def _ids(manifest: dict) -> dict[str, str]:

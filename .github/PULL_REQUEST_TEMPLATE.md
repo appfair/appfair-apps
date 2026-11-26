@@ -21,8 +21,9 @@ Two narrower templates:
 
 ## Confirmations
 
-- [ ] The app and all direct and transitive dependencies have publicly available source under
-      DFSG-compliant licenses with compatible distribution terms; required notices are retained.
+- [ ] I have the rights to submit the app under GPL-2.0-or-later. Its source and GPL version 2 license text are public.
+- [ ] All direct and transitive dependencies have public source under DFSG-compliant licenses
+      that permit distribution with the app through the requested channels. I have retained their notices.
 - [ ] For every binary dependency (including Maven JARs), I have provided source revisions,
       build instructions and environment, and evidence that the released binary can be reproduced
       from that source, or this release uses no binary dependencies.

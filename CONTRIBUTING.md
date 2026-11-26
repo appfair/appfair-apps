@@ -289,11 +289,14 @@ out of date as soon as an app changed hands.
 
 ## License and dependency review
 
-The app's source and the source of **all dependent software, including transitive dependencies**,
-must be publicly available under licenses meeting the
-[Debian Free Software Guidelines (DFSG)](https://www.debian.org/social_contract.html#guidelines).
-No particular license is required. Retain applicable license texts and notices, and verify that
-license terms permit distribution of the components together.
+For each new app or update, publish the app’s source under **GPL-2.0-or-later**. Include the complete
+[GPL version 2 text](.github/actions/appfair-lint/reference/LICENSE.txt) as `LICENSE.txt`.
+The app’s license declaration must grant recipients the choice of version 2 or any later version.
+
+Every direct and transitive dependency must have public source under a license that meets the
+[Debian Free Software Guidelines (DFSG)](https://www.debian.org/social_contract.html#guidelines)
+and permits distribution with the app through the requested channels. Preserve third-party
+licenses, exceptions and notices.
 
 For each release, review the full dependency tree, including native libraries, SDKs, plugins and
 copied code. Binary dependencies such as Maven JARs are permitted only if their released binaries
@@ -301,9 +304,9 @@ can provably be reproduced by building the available source. Supply exact source
 instructions and environment, and verification evidence for the binaries used. A source archive,
 package repository listing or app rebuild using the same prebuilt dependencies is not proof.
 
-The lint checks documentation and notices; it does not establish DFSG compliance, dependency
-coverage, license compatibility or binary reproducibility. Reviewers must verify these before
-approving a submission. See the [inclusion criteria](https://appfair.org/docs/inclusion-criteria/#license-and-dependencies).
+Lint checks the app’s license declaration, the license text and source notices.
+Reviewers verify the rights granted, dependency coverage, DFSG compliance, license compatibility
+and binary reproducibility. See the [inclusion criteria](https://appfair.org/docs/inclusion-criteria/#license-and-dependencies).
 
 ## What the checks do
 
@@ -314,8 +317,8 @@ eighth waits for an App Fair maintainer.
    checked too.
 2. **The file**: the shape above, the tag pattern, the channels and their targets, and the
    uniqueness of the title and of the ids across the catalog.
-3. **The app's repository** (`appfair-lint`): license texts are present for review under the DFSG
-   policy, every Rust source names the licence it is under, and
+3. **The app's repository** (`appfair-lint`). The app declares GPL-2.0-or-later and includes
+   the GPL version 2 text. Every Rust source names its license, and
    `Day-appfair.toml` carries the identity the catalog publishes. Run it yourself with
    `uses: appfair/appfair-apps/.github/actions/appfair-lint@main`, and nothing here is a surprise.
 4. **The app against the file**: the pinned commit's manifest, read through a sparse checkout that

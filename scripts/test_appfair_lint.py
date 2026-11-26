@@ -6,6 +6,7 @@ failure in its own test instead of in a shared sample tree.
 
 import contextlib
 import io
+import shutil
 import sys
 import tempfile
 import unittest
@@ -16,8 +17,8 @@ sys.path.insert(0, str(ROOT / ".github" / "actions" / "appfair-lint"))
 
 import appfair_lint as lint  # noqa: E402
 
-# Synthetic source fixture; license terms are assessed separately during review.
-SPDX = "// SPDX-License-Identifier: MIT\n"
+# Source notice for the synthetic app fixture.
+SPDX = "// SPDX-License-Identifier: GPL-2.0-or-later\n"
 
 
 class LintTests(unittest.TestCase):
@@ -30,7 +31,7 @@ class LintTests(unittest.TestCase):
         """An app that passes every rule."""
         (self.root / "Day.toml").write_text('schema = 1\n[app]\nid = "io.github.Demo"\n')
         (self.root / "Day-appfair.toml").write_text('[app]\nid = "org.appfair.app.Demo"\n')
-        (self.root / "LICENSE.txt").write_text("Synthetic license fixture for presence checks\n")
+        shutil.copyfile(lint.REFERENCE, self.root / "LICENSE.txt")
         (self.root / "src").mkdir()
         (self.root / "src" / "lib.rs").write_text(SPDX + "pub fn demo() {}\n")
         return self.root
@@ -55,10 +56,7 @@ class LintTests(unittest.TestCase):
 
     def test_every_rule_is_asked_so_one_push_sees_every_problem(self):
         # An empty directory: no manifest, no flavor, no licences, and nothing to read them from.
-        codes = self.codes()
-        self.assertEqual(
-            sorted(codes), ["day-project", "flavor-manifest", "license"]
-        )
+        self.assertEqual(set(self.codes()), {"day-project", "flavor-manifest", "license"})
 
     def test_a_missing_flavor_manifest_says_what_to_write(self):
         self.good()
@@ -74,22 +72,24 @@ class LintTests(unittest.TestCase):
         )
         self.assertIn("Day-gamesfair.toml", other.findings[0].message)
 
-    def test_license_choices_pass_without_network_access(self):
+    def test_other_app_licenses_fail_even_with_the_reference_text(self):
         self.good()
-        (self.root / "LICENSE.txt").unlink()
-        # Synthetic license texts: the lint checks presence, leaving terms to human review.
-        for expression in ("MIT", "Apache-2.0", "GPL-3.0-or-later", "MIT OR Apache-2.0"):
+        for expression in ("MIT", "Apache-2.0", "GPL-2.0-only", "GPL-3.0-only", "GPL-3.0-or-later",
+                           "AGPL-3.0-only", "GPL-2.0-or-later WITH Classpath-exception-2.0",
+                           "MIT OR GPL-2.0-or-later"):
             with self.subTest(expression=expression):
-                (self.root / "COPYING").write_text(f"Synthetic {expression} license fixture\n")
-                (self.root / "src/lib.rs").write_text(
-                    f"// SPDX-License-Identifier: {expression}\npub fn demo() {{}}\n"
-                )
-                from unittest.mock import patch
-                with patch("socket.create_connection", side_effect=AssertionError("network")):
-                    report = self.report()
-                self.assertEqual(report.findings, [])
-                self.assertIn("transitive dependencies", " ".join(report.notes))
-                self.assertIn("binary dependency", " ".join(report.notes))
+                (self.root / "Cargo.toml").write_text(f'[package]\nlicense = "{expression}"\n')
+                self.assertEqual([f.path for f in self.findings()], ["Cargo.toml"])
+
+    def test_app_package_license_can_be_inherited_and_third_party_files_keep_their_notices(self):
+        self.good()
+        (self.root / "src/lib.rs").write_text("// SPDX-License-Identifier: MIT\n")
+        self.assertEqual(self.codes(), ["license"])
+        expression = "GPL-2.0-or-later"
+        for package in (f'license = "{expression}"', f'license.workspace = true\n[workspace.package]\nlicense = "{expression}"'):
+            with self.subTest(package=package):
+                (self.root / "Cargo.toml").write_text(f'[package]\n{package}\n')
+                self.assertEqual(self.findings(), [])
 
     def test_missing_empty_and_unreadable_license_texts_fail(self):
         self.good()
@@ -103,28 +103,25 @@ class LintTests(unittest.TestCase):
         p.unlink()
         self.assertEqual(self.codes(only=["license"]), ["license"])
 
-    def test_license_file_conventions_and_reuse_directory(self):
+    def test_license_text_passes_with_formatting_differences(self):
         self.good()
-        (self.root / "LICENSE.txt").unlink()
-        for name in ("LICENSE", "LICENSE.md", "LICENSE-MIT", "COPYING", "COPYING.txt", "LICENSES/MIT.txt"):
-            with self.subTest(name=name):
-                p = self.root / name
-                p.parent.mkdir(exist_ok=True)
-                p.write_text("Synthetic license fixture for presence check\n")
-                self.assertEqual(self.findings(only=["license"]), [])
-                p.unlink()
-
-    def test_license_presence_does_not_claim_compliance(self):
-        self.good()
-        (self.root / "LICENSE.txt").write_text("Synthetic nonfree terms for manual review\n")
+        path = self.root / "LICENSE.txt"
+        path.write_bytes(path.read_bytes().replace(b"\n", b"\r\n"))
         report = self.report(only=["license"])
         self.assertEqual(report.findings, [])
-        self.assertIn("do not establish compliance", report.notes[0])
+        self.assertIn("transitive dependencies", report.notes[0])
+        self.assertIn("binary dependency", report.notes[0])
         import json
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
             lint.main(["--path", str(self.root), "--only", "license", "--format", "json"])
         self.assertEqual(json.loads(output.getvalue())["notes"], report.notes)
+
+    def test_wrong_primary_license_text_fails_even_with_an_extra_gpl_copy(self):
+        self.good()
+        (self.root / "LICENSE.txt").rename(self.root / "COPYING")
+        (self.root / "LICENSE.txt").write_text("Synthetic permissive license\n")
+        self.assertEqual([f.path for f in self.findings()], ["LICENSE.txt"])
 
     def test_an_id_android_cannot_build_is_named_with_the_platform_and_the_fix(self):
         self.good()

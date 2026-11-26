@@ -29,7 +29,7 @@ jobs:
 |---|---|
 | `day-project` | The directory holds a `Day.toml`, so there is a Day project to check. |
 | `flavor-manifest` | `Day-appfair.toml` is there, which is where the ids the App Fair publishes under live. |
-| `license` | A nonempty, readable license text is present in `LICENSE`, `COPYING`, a suffixed variant, or `LICENSES/*.txt`. DFSG compliance requires review. |
+| `license` | The app declares GPL-2.0-or-later and includes the complete GPL version 2 text. |
 | `app-ids` | The id each platform builds under is one that platform accepts. Android and HarmonyOS read it as a Java package name, so a hyphen there needs an `[app.android]` / `[app.harmony]` override. |
 | `spdx-headers` | Every `.rs` file has a nonempty `// SPDX-License-Identifier:` notice in its first five lines, naming its own license expression. This does not validate the expression or its terms. |
 
@@ -38,22 +38,23 @@ file in Actions. Every rule runs, so one push reports every problem.
 
 ## The licence texts
 
-Apps may use any license meeting the [Debian Free Software Guidelines (DFSG)](https://www.debian.org/social_contract.html#guidelines).
-The app and **all dependent software, including transitive dependencies**, must have publicly
-available source under DFSG-compliant licenses, with terms compatible with distribution together.
+Publish the app’s source under `GPL-2.0-or-later`. Copy
+[`LICENSE.txt`](reference/LICENSE.txt) to the repository root. Lint compares it with the
+reference text, ignoring whitespace.
+Declare the app license in the app’s `Cargo.toml` package metadata. If the package omits the
+license field, lint reads the SPDX notice in `src/lib.rs` or `src/main.rs`.
+
+Every direct and transitive dependency needs public source under a license meeting the
+[Debian Free Software Guidelines (DFSG)](https://www.debian.org/social_contract.html#guidelines).
+Its terms must permit distribution with the app through the requested channels. Preserve its
+own license, exceptions and notices.
 Binary dependencies, including Maven JARs, are permitted only if the released binary can provably
 be reproduced by building the available source. Review the exact source revisions, build
 instructions and environment, and verification evidence for each binary used.
 
-The `license` rule checks for license documentation and emits a review reminder in both text and
-JSON reports. It does not recognize license texts, certify DFSG compliance, resolve dependency
-trees, or prove binary reproducibility. Those are required review steps under the
+The checks run offline. Text and JSON reports include a reminder for reviewers to verify the
+rights granted, dependency licenses, compatibility and binary reproducibility against the
 [inclusion criteria](https://appfair.org/docs/inclusion-criteria/#license-and-dependencies).
-Rebuilding an app using the same prebuilt dependency does not verify that dependency's source.
-
-License and notice checks run locally without fetching a reference license or requiring a
-particular starter project. Retain all applicable license texts, exceptions and notices;
-reviewers assess their terms under the same policy.
 
 ## Adding a rule
 
