@@ -71,8 +71,9 @@ runners:
   ios-uikit: xcode-27
   android-material: ubuntu-latest
 
-# Which day CLI builds every submission. `main` tracks the framework; a released version pins it.
-day-version: main
+# Match the released CLI to day-core in the submitted commit's crates.io Cargo.lock.
+# A fixed release override must match that lock; main/latest are not release inputs.
+day-version: auto
 
 # --- The reviewer's summary ------------------------------------------------------------------
 # The pull-request checks work out the range between the published commit and the proposed one

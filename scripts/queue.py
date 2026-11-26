@@ -127,7 +127,7 @@ class Policy:
             commit_pattern=raw["commit-pattern"],
             channels=channels,
             flavor=str(raw.get("flavor") or default_flavor()),
-            day_version=str(raw.get("day-version", "main")),
+            day_version=str(raw.get("day-version", "auto")),
             review_highlights=[
                 str(pattern) for pattern in (raw.get("review") or {}).get("highlight-paths", [])
             ],
@@ -513,6 +513,33 @@ def submits_screenshots(app: App) -> bool:
     return bool(app.data.get("screenshots", True))
 
 
+def release_day_version(text: str, requested: str = "auto") -> str:
+    """Read immutable release inputs; never resolve the current tip or newest release."""
+    packages = tomllib.loads(text).get("package", [])
+    registry = "registry+https://github.com/rust-lang/crates.io-index"
+    if not packages or any(p.get("source") not in (None, registry) for p in packages):
+        raise ValueError("submission requires a crates.io-only Cargo.lock")
+    if any(p.get("source") == registry and not p.get("checksum") for p in packages):
+        raise ValueError("submission lock requires crates.io checksums")
+    versions = {p["version"] for p in packages if p["name"] == "day-core" and p.get("source") == registry}
+    if len(versions) != 1:
+        raise ValueError("submission lock must contain one crates.io day-core version")
+    version = versions.pop()
+    if requested not in ("auto", version, "v" + version):
+        raise ValueError(f"submission CLI must match locked Day v{version}, not {requested}")
+    return "v" + version
+
+
+def submission_day_version(app: App, policy: Policy) -> str:
+    commit = str(app.data.get("commit", ""))
+    if not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise ValueError(f"{app.token}: pin the submission commit before resolving its CLI")
+    text = fetch_text(app.owner_repo, commit, "Cargo.lock")
+    if text is None:
+        raise ValueError(f"{app.token}: the pinned submission has no readable Cargo.lock; prepare a new locked release")
+    return release_day_version(text, policy.day_version)
+
+
 def matrix_entry(app: App, policy: Policy) -> dict:
     """One row per app, holding what every stage needs from the submission."""
     pairs = app_channels(app, policy)
@@ -593,7 +620,15 @@ def cmd_plan(args: argparse.Namespace) -> int:
     if problems:
         return 1
 
-    entries = [matrix_entry(app, policy) for app in apps]
+    try:
+        entries = []
+        for app in apps:
+            entry = matrix_entry(app, policy)
+            entry["day_version"] = submission_day_version(app, policy)
+            entries.append(entry)
+    except (ValueError, OSError) as error:
+        Problem("plan", str(error)).emit()
+        return 1
     matrix = json.dumps({"include": entries}, separators=(",", ":"))
     # Two more matrices, because the stages fan out differently. A build happens once per target;
     # a submission happens once per channel, and a target can feed several.

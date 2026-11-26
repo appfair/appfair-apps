@@ -20,7 +20,7 @@ inputs:
   day-version:
     description: Which day CLI to build with.
     required: false
-    default: main
+    default: auto
   out:
     description: Where to leave the packages and their sidecars.
     required: false
@@ -77,9 +77,17 @@ runs:
         pack: true
         java: true
 
+    - name: Validate the submitted release dependencies
+      id: deps
+      uses: daybrite/actions/.github/actions/day-deps@v1
+      with:
+        path: app
+        day-deps: release
+        day-version: ${{ inputs.day-version }}
+
     - uses: daybrite/actions/.github/actions/setup-day-cli@v1
       with:
-        version: ${{ inputs.day-version }}
+        version: ${{ steps.deps.outputs.cli }}
 
     - name: Run day lint
       working-directory: app
@@ -103,6 +111,11 @@ runs:
         # Unsigned: the signing happens in stage C, which holds the keys and runs no app code.
         "$DAY_BIN" $FLAVOR_ARGS pack \
           --target "${{ inputs.target }}" --no-sign --no-version-in-name --format json | tee "$RUNNER_TEMP/pack-${{ inputs.target }}.json"
+
+    - name: Verify the release lock was preserved
+      shell: bash
+      working-directory: app
+      run: git diff --exit-code HEAD -- Cargo.lock
 
     - name: Collect the packages
       shell: bash
