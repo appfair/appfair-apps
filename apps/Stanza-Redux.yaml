@@ -8,10 +8,10 @@
 
 token: Stanza-Redux
 title: Stanza Redux
-tag: v2.2.8
+tag: v2.2.10
 # The commit that tag points at. Since a tag can be moved afterwards, this is what every stage
 # checks out. `scripts/queue.py update Stanza-Redux` rewrites both lines.
-commit: d723ec9288f884a339f3fd5ad4d4bb2141d78b31
+commit: a92b9b1ac641a70d0e43fd9eb9505a8e85c357e8
 
 # Where this app goes, keyed by the target that builds for it. policy.yaml lists the channels the
 # queue can publish to. Drop a line to keep the app off a channel.
