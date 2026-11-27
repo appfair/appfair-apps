@@ -8,6 +8,8 @@
 
 token: Day-Plan
 title: Day-Plan
+id: org.appfair.app.SkipNotes
+android-id: org.appfair.app.SkipNotes
 tag: v1.0.1
 # The commit that tag points at. Since a tag can be moved afterwards, this is what every stage
 # checks out. `scripts/queue.py update Day-Plan` rewrites both lines.
