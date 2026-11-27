@@ -243,13 +243,18 @@ jobs:
           fi
       - name: Cut the listing out of the release
         if: ${{ matrix.screenshots }}
+        env:
+          SUBMISSION_TARGETS: ${{ matrix.targets }}
         run: |
           set -euo pipefail
           "$DAY_BIN" screenshot unpack release-shots/screenshots.tar.xz --out release-shots/unpacked
           python3 scripts/queue.py listing --gallery release-shots/unpacked/gallery.json \
             --captures release-shots/unpacked --out listing
-          "$DAY_BIN" --project app-data ${{ matrix.flavor != '' && format('--flavor {0}', matrix.flavor) || '' }} \
-            store screenshots "$PWD/listing/gallery.json"
+          IFS=, read -r -a targets <<< "${SUBMISSION_TARGETS:?missing submission targets}"
+          for target in "${targets[@]}"; do
+            "$DAY_BIN" --project app-data ${{ matrix.flavor != '' && format('--flavor {0}', matrix.flavor) || '' }} \
+              store screenshots "$PWD/listing/gallery.json" --target "$target"
+          done
       - name: Keep the listing for the review and the submission
         if: ${{ matrix.screenshots }}
         uses: actions/upload-artifact@v7

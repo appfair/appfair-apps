@@ -161,7 +161,11 @@ class FlowTests(unittest.TestCase):
             self.assertIn("--gallery release-shots/unpacked/gallery.json", cut["run"])
             self.assertIn("--captures release-shots/unpacked --out listing", cut["run"])
             self.assertLess(cut["run"].index("screenshot unpack"), cut["run"].index("queue.py listing"))
-            self.assertIn("store screenshots", cut["run"])
+            targets = ("matrix.targets" if name == "pr" else
+                       "join(fromJSON(needs.plan.outputs.build-matrix).include.*.target, ',')")
+            self.assertEqual(cut["env"]["SUBMISSION_TARGETS"], "${{ " + targets + " }}")
+            self.assertIn('for target in "${targets[@]}"', cut["run"])
+            self.assertIn('store screenshots "$PWD/listing/gallery.json" --target "$target"', cut["run"])
             keep = verify["steps"][names.index("Keep the listing for the review and the submission")]
             self.assertEqual(keep["with"]["name"], "listing-${{ matrix.token }}")
         publish = WORKFLOWS["submit"]["jobs"]["publish"]
