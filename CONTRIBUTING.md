@@ -57,6 +57,29 @@ key-pass = "${DAY_KEY_PASS}"
 The signing tables hold environment references, filled on the queue's runners from the App Fair's
 secrets, so nothing secret is committed to the app.
 
+The app builds in the App Fair module, the `day-piece-appfair` crate, which adds an App Fair
+group to its settings. It takes one dependency in `Cargo.toml` and one call on the `Preferences`
+builder where the app declares its settings:
+
+```toml
+[dependencies]
+day-piece-appfair = "0.*"
+```
+
+```rust
+Preferences::new()
+    .about(about)
+    .group(general)
+    .provider(&day_piece_appfair::APP_FAIR)
+    .install();
+```
+
+The lint checks both. It also checks that the committed `Cargo.lock` locks the crate as crates.io
+published it, so a lock written against a local checkout fails. The validation stage looks for
+the crate's marker in the built package.
+[The action's README](.github/actions/appfair-lint/README.md#the-app-fair-module) lists what each
+check accepts.
+
 The store listing (name, description, keywords, screenshots, release notes, icon) is the app's
 `store-appfair/` directory and its `resource-appfair/` overlay, or plain `store/` and `resource/`
 for an app with no flavor. The queue reads them at the submitted commit and modifies nothing.
@@ -319,7 +342,9 @@ eighth waits for an App Fair maintainer.
    uniqueness of the title and of the ids across the catalog.
 3. **The app's repository** (`appfair-lint`). The app declares GPL-2.0-or-later and includes
    the GPL version 2 text. Every Rust source names its license, and
-   `Day-appfair.toml` carries the identity the catalog publishes. Run it yourself with
+   `Day-appfair.toml` carries the identity the catalog publishes. `day-piece-appfair` is a
+   crates.io dependency, the committed `Cargo.lock` locks its crates.io release, and the settings
+   builder is given its provider. Run it yourself with
    `uses: appfair/appfair-apps/.github/actions/appfair-lint@main`, and nothing here is a surprise.
 4. **The app against the file**: the pinned commit's manifest, read through a sparse checkout that
    excludes the source. `day metadata --json` must report the version the tag names and the
@@ -356,6 +381,7 @@ eighth waits for an App Fair maintainer.
    | permissions | a permission the app never declared |
    | comparison | content differing from the app's own release of the same commit, beyond the app's own binary |
    | provenance | a missing SBOM, a commit other than the pinned one, or a build from a dirty checkout |
+   | App Fair module | a `libdayapp.so` or an iOS executable without the `day-piece-appfair/<version>` marker, or with a version below the minimum |
    | scan | ClamAV finding something |
 
 8. **The submission** (stage C), behind the `store` environment's reviewers: an App Fair
@@ -441,6 +467,7 @@ that: a release with no notes leaves the reviewer reading commits.
 | the build | the app does not build at that commit on that target. Fix it in the app's repository |
 | identity or permissions | the package and the manifest disagree; both come from the app, so the fix is there |
 | the comparison | reproduce the difference, or have a maintainer waive it with the label |
+| the App Fair module | the package was built without `day-piece-appfair`, or with a release older than the minimum. Add or update the dependency in the app (the `appfair-module` lint rule names each step), tag again, and update `tag` and `commit` here |
 | the scan | a maintainer will contact you; nothing is published after a scan finds something |
 | the upload | open a [publication problem](https://github.com/appfair/appfair-apps/issues/new?template=publication-problem.yml) with the run link |
 | the store check before signing | the release cannot land as it stands: Play already has this version code (raise `build` in the manifest and tag again), or the App Store record carries a language the listing does not |

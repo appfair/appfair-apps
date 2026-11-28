@@ -6,7 +6,7 @@
 # scripts/test_appfair_lint.py covers them.
 name: App Fair lint
 description: >-
-  Check the app's GPL-2.0-or-later declaration, the license text and Rust source notices, and the flavor manifest holding its publication ids.
+  Check the app's GPL-2.0-or-later declaration, the license text and Rust source notices, the flavor manifest holding its publication ids, and the App Fair module: in its settings, and locked from crates.io in the committed Cargo.lock.
 
 inputs:
   path:

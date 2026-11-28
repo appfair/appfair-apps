@@ -68,6 +68,55 @@ LICENSE_REVIEW_NOTE = (
 # How far in the notice may sit, so a shebang or an attribute can precede it.
 SPDX_WITHIN = 5
 
+# The crate every App Fair app builds in. It adds the App Fair group to the app's settings and
+# leaves the bytes `day-piece-appfair/<version>` and a NUL in the binary. APPFAIR_MODULE_MINIMUM
+# is the oldest release the catalog accepts, and the one place that states it: the
+# `appfair-module` rule holds an app's Cargo.lock to it, and scripts/queue.py holds the marker in
+# a built package to it.
+APPFAIR_MODULE = "day-piece-appfair"
+APPFAIR_MODULE_MINIMUM = "0.1.0"
+# Where a Cargo.lock entry comes from when crates.io published it, whichever protocol fetched it.
+CRATES_IO = "registry+https://github.com/rust-lang/crates.io-index"
+
+SEMVER = re.compile(r"(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?")
+
+# Rust's comments, and the literals a comment marker can sit inside, so a commented-out call is
+# not read as a call and the `//` of a quoted URL does not start a comment.
+RUST_COMMENT_OR_LITERAL = re.compile(
+    r'r(#*)"[\s\S]*?"\1'
+    r'|"(?:\\[\s\S]|[^"\\])*"'
+    r"|'(?:\\(?:x[0-9A-Fa-f]{2}|u\{[0-9A-Fa-f_]+\}|[^\n])|[^'\\\n])'"
+    r"|//[^\n]*"
+    r"|/\*[\s\S]*?\*/"
+)
+# The call that hands the group to the `Preferences` builder of day-piece-settings, however
+# rustfmt breaks it: with the constant's path spelled out, or bare beside a `use` of it. `{crate}`
+# is the name the app's code knows the crate by.
+PROVIDER_CALL = r"\.\s*provider\s*\(\s*&\s*(?:::\s*)?{crate}\s*::\s*APP_FAIR\s*,?\s*\)"
+PROVIDER_CALL_IMPORTED = re.compile(r"\.\s*provider\s*\(\s*&\s*APP_FAIR\s*,?\s*\)")
+PROVIDER_IMPORT = (
+    r"\buse\s+(?:::\s*)?{crate}\s*::\s*(?:APP_FAIR\b|\{{[^;]*?\bAPP_FAIR\b)(?!\s+as\b)"
+)
+# The builder call that takes the group out again, by the id the crate gives it: the literal, or
+# the crate's `GROUP_ID` constant under any path. A builder set to `Providers::None` still
+# collects the providers an app names, so that setting passes.
+WITHOUT_PROVIDER = re.compile(
+    r"\.\s*without_provider\s*\(\s*(?:\"appfair\"|(?:[A-Za-z_][A-Za-z0-9_]*\s*::\s*)*GROUP_ID)\s*,?\s*\)"
+)
+PREFERENCES_BUILDER = re.compile(r"\bPreferences\s*::\s*new\s*\(")
+# A settings group the app declares under the id the module's group has. The id and its
+# `settings/appfair` route are the module's: day-piece-settings keeps the provider's group when two
+# share an id, so the app's group would not show. `Group` may carry its path. The id is the
+# literal, the crate's `GROUP_ID` under its path, or `GROUP_ID` alone in a file that imports it
+# from the crate (an app is free to name a constant of its own `GROUP_ID`).
+GROUP_NEW = r"\bGroup\s*::\s*new\s*\(\s*"
+RESERVED_GROUP_LITERAL = re.compile(GROUP_NEW + r'"appfair"')
+RESERVED_GROUP_PATH = GROUP_NEW + r"(?:::\s*)?{crate}\s*::\s*GROUP_ID\b"
+RESERVED_GROUP_IMPORTED = re.compile(GROUP_NEW + r"GROUP_ID\b")
+GROUP_ID_IMPORT = (
+    r"\buse\s+(?:::\s*)?{crate}\s*::\s*(?:GROUP_ID\b|\{{[^;]*?\bGROUP_ID\b)(?!\s+as\b)"
+)
+
 
 @dataclass(frozen=True)
 class Finding:
@@ -344,6 +393,310 @@ def spdx_headers(project: Project) -> Iterable[Finding]:
             path=project.rel(path),
             line=1,
         )
+
+
+def version_key(version: str) -> tuple | None:
+    """A sortable form of a semver version, or None for text that is not one. A pre-release sorts
+    before its release, and its identifiers compare as semver orders them.
+    """
+    match = SEMVER.fullmatch(version.strip())
+    if not match:
+        return None
+    major, minor, patch, pre = match.groups()
+    identifiers = tuple(
+        (0, int(part), "") if part.isdigit() else (1, 0, part) for part in pre.split(".")
+    ) if pre else ()
+    return (int(major), int(minor), int(patch), 0 if pre else 1, identifiers)
+
+
+def version_at_least(version: str, minimum: str) -> bool:
+    """Whether `version` is `minimum` or newer. Text that is not a version is older than any."""
+    key, floor = version_key(version), version_key(minimum)
+    if floor is None:
+        raise ValueError(f"{minimum!r} is not a semver version")
+    return key is not None and key >= floor
+
+
+def rust_code(text: str) -> str:
+    """Rust source with its comments blanked. Every other character stays where it was, so a match
+    in the result is on the line it has in the file.
+    """
+
+    def blank(match: re.Match) -> str:
+        found = match.group(0)
+        return re.sub(r"[^\n]", " ", found) if found.startswith(("//", "/*")) else found
+
+    return RUST_COMMENT_OR_LITERAL.sub(blank, text)
+
+
+def _line(text: str, offset: int) -> int:
+    return text.count("\n", 0, offset) + 1
+
+
+def _module_entry(cargo: dict, table: object) -> tuple[str, object] | None:
+    """The entry of a dependency table that names the module, with the key it sits under. A
+    dependency renamed with `package = "day-piece-appfair"` counts, and an entry that says
+    `workspace = true` is read from `[workspace.dependencies]`, which states its version.
+    """
+    if not isinstance(table, dict):
+        return None
+    inherited = cargo.get("workspace", {}).get("dependencies", {})
+    for key, entry in table.items():
+        if isinstance(entry, dict) and entry.get("workspace") is True:
+            entry = inherited.get(key, entry)
+        package = entry.get("package", key) if isinstance(entry, dict) else key
+        if package == APPFAIR_MODULE:
+            return key, entry
+    return None
+
+
+def _module_manifest(project: Project) -> tuple[list[Finding], str]:
+    """Cargo.toml asks crates.io for the module, under `[dependencies]`. Returns the findings and
+    the name the app's code knows the crate by, which a renamed dependency changes.
+    """
+    crate = APPFAIR_MODULE.replace("-", "_")
+    manifest = project.path("Cargo.toml")
+    text = project.read(manifest)
+    try:
+        if text is None and manifest.exists():
+            raise ValueError("it is not UTF-8 text")
+        text = text or ""
+        cargo = tomllib.loads(text)
+    except ValueError as error:  # a TOMLDecodeError is one
+        return [Finding(
+            "appfair-module", f"Cannot read Cargo.toml: {error}", "provide valid UTF-8 TOML",
+            path="Cargo.toml",
+        )], crate
+
+    def line(pattern: str) -> int | None:
+        found = re.search(pattern, text, re.MULTILINE)
+        return _line(text, found.start()) if found else None
+
+    module = re.escape(APPFAIR_MODULE)
+    requirement = f'{APPFAIR_MODULE} = "0.*"'
+    declared = _module_entry(cargo, cargo.get("dependencies"))
+    if declared is None:
+        # The tables a build can leave out: one for some targets, for tests or for build.rs.
+        others = {
+            f"target.'{cfg}'.dependencies": target.get("dependencies")
+            for cfg, target in cargo.get("target", {}).items() if isinstance(target, dict)
+        }
+        others |= {name: cargo.get(name) for name in ("dev-dependencies", "build-dependencies")}
+        elsewhere = next((n for n, table in others.items() if _module_entry(cargo, table)), None)
+        if elsewhere:
+            return [Finding(
+                "appfair-module",
+                f"Cargo.toml lists {APPFAIR_MODULE} under [{elsewhere}] and not under "
+                f"[dependencies], so a build can leave the App Fair module out",
+                f"move it under [dependencies], where every target builds it:\n    {requirement}",
+                path="Cargo.toml",
+                line=line(rf'^[ \t]*(?:{module}(?![\w-])|.*\bpackage\s*=\s*"{module}")'),
+            )], crate
+        return [Finding(
+            "appfair-module",
+            f"Cargo.toml has no {APPFAIR_MODULE} under [dependencies], and every App Fair app "
+            f"builds that crate in for the App Fair group of its settings",
+            f"add this line under [dependencies] in Cargo.toml:\n    {requirement}",
+            path="Cargo.toml",
+            line=line(r"^[ \t]*\[dependencies\]"),
+        )], crate
+
+    key, entry = declared
+    crate = key.replace("-", "_")
+    if isinstance(entry, str):
+        return [], crate
+    if key != APPFAIR_MODULE:
+        requirement = f'{key} = {{ package = "{APPFAIR_MODULE}", version = "0.*" }}'
+    where = line(rf"^[ \t]*(?:\[dependencies\.)?{re.escape(key)}(?![\w-])")
+    fields = entry if isinstance(entry, dict) else {}
+    source = next((name for name in ("path", "git") if name in fields), None)
+    if source:
+        origin = "a local path" if source == "path" else "a git repository"
+        return [Finding(
+            "appfair-module",
+            f"Cargo.toml takes {APPFAIR_MODULE} from {origin}, and a tagged release has to build "
+            f"it from crates.io",
+            f"replace the entry with a crates.io version requirement:\n    {requirement}",
+            path="Cargo.toml",
+            line=where,
+        )], crate
+    if not isinstance(fields.get("version"), str):
+        return [Finding(
+            "appfair-module",
+            f"Cargo.toml gives {APPFAIR_MODULE} no version, so the entry names no crates.io "
+            f"release",
+            f"state a crates.io version requirement:\n    {requirement}",
+            path="Cargo.toml",
+            line=where,
+        )], crate
+    return [], crate
+
+
+def _lock_line(text: str, version: str, key: str) -> int | None:
+    """The 1-based line of `key` in the module's lock entry for `version`, or the entry's `name`
+    line when the entry has no such key."""
+    entry = re.search(
+        rf'^name\s*=\s*"{re.escape(APPFAIR_MODULE)}"\s*\nversion\s*=\s*"{re.escape(version)}"[^\n]*'
+        rf"(?:\n(?!\[)[^\n]+)*",
+        text, re.MULTILINE,
+    )
+    if not entry:
+        return None
+    found = re.search(rf"^{re.escape(key)}\s*=", entry.group(0), re.MULTILINE)
+    return _line(text, entry.start() + (found.start() if found else 0))
+
+
+def _module_lock(project: Project) -> Iterable[Finding]:
+    """The app commits a Cargo.lock that locks the module as crates.io published it: an entry
+    whose `source` is the crates.io registry, with its checksum, at a release the catalog accepts.
+    The catalog builds what the lock names. An entry with no `source` is a local checkout, which a
+    patch table or a path dependency leaves there, and it is reported like any other source.
+    """
+    path = project.path("Cargo.lock")
+    relock = (
+        "write the lock with no local source in effect: move .cargo/config.toml (the patch table "
+        "`day patch --local` writes) out of the way, "
+    )
+    if not path.is_file():
+        yield Finding(
+            "appfair-module",
+            "the app commits no Cargo.lock, and the catalog builds the releases a lock names",
+            f"{relock}run `cargo generate-lockfile`, check the result with "
+            "`cargo metadata --locked`, then commit Cargo.lock",
+            path="Cargo.lock",
+        )
+        return
+    text = project.read(path) or ""
+    try:
+        packages = tomllib.loads(text).get("package", [])
+    except tomllib.TOMLDecodeError as error:
+        yield Finding(
+            "appfair-module", f"Cannot read Cargo.lock: {error}",
+            "restore the Cargo.lock that cargo wrote", path="Cargo.lock",
+        )
+        return
+    locked = [p for p in packages if isinstance(p, dict) and p.get("name") == APPFAIR_MODULE]
+    if not locked:
+        yield Finding(
+            "appfair-module",
+            f"Cargo.lock locks no {APPFAIR_MODULE}, and the catalog builds what the lock names",
+            f"with the dependency in Cargo.toml, run `cargo update --workspace`, which locks "
+            f"{APPFAIR_MODULE} and leaves every other package where it is, then commit Cargo.lock",
+            path="Cargo.lock",
+        )
+    # `cargo update -p` cannot name an entry that has no source once the patch table is gone,
+    # and `--workspace` locks it again from crates.io while every other package stays put.
+    update = (
+        "run `cargo update --workspace`, check the result with `cargo metadata --locked`, then "
+        "commit Cargo.lock"
+    )
+    for package in locked:
+        version = str(package.get("version", ""))
+        source = package.get("source")
+        if source != CRATES_IO:
+            if source is None:
+                origin = "from a local checkout (the entry has no `source`)"
+            elif str(source).startswith("git+"):
+                origin = f"from a git repository ({source})"
+            else:
+                origin = f"from another registry ({source})"
+            yield Finding(
+                "appfair-module",
+                f"Cargo.lock locks {APPFAIR_MODULE} {version} {origin}, and the catalog builds "
+                f"the release crates.io published",
+                f"{relock}{update}",
+                path="Cargo.lock",
+                line=_lock_line(text, version, "source"),
+            )
+        elif not package.get("checksum"):
+            yield Finding(
+                "appfair-module",
+                f"Cargo.lock locks {APPFAIR_MODULE} {version} from crates.io with no checksum, "
+                f"and the catalog takes a registry entry only with the checksum cargo wrote",
+                update,
+                path="Cargo.lock",
+                line=_lock_line(text, version, "checksum"),
+            )
+        if not version_at_least(version, APPFAIR_MODULE_MINIMUM):
+            yield Finding(
+                "appfair-module",
+                f"Cargo.lock locks {APPFAIR_MODULE} {version}, and the App Fair takes "
+                f"{APPFAIR_MODULE_MINIMUM} or newer",
+                f"run `cargo update -p {APPFAIR_MODULE}` and commit Cargo.lock",
+                path="Cargo.lock",
+                line=_lock_line(text, version, "version"),
+            )
+
+
+def _module_sources(project: Project, crate: str) -> Iterable[Finding]:
+    """The settings builder is handed the group, nothing takes it out again, and no group of the
+    app's is declared under its id."""
+    call = re.compile(PROVIDER_CALL.format(crate=re.escape(crate)))
+    imported = re.compile(PROVIDER_IMPORT.format(crate=re.escape(crate)))
+    reserved_path = re.compile(RESERVED_GROUP_PATH.format(crate=re.escape(crate)))
+    group_id_imported = re.compile(GROUP_ID_IMPORT.format(crate=re.escape(crate)))
+    src = project.path("src")
+    passed = False
+    builder: tuple[str, int] | None = None
+    for path in project.sources(".rs"):
+        text = project.read(path)
+        if text is None:
+            continue
+        code = rust_code(text)
+        name = project.rel(path)
+        if path.is_relative_to(src):
+            if call.search(code) or (PROVIDER_CALL_IMPORTED.search(code) and imported.search(code)):
+                passed = True
+            found = PREFERENCES_BUILDER.search(code)
+            if found and builder is None:
+                builder = (name, _line(code, found.start()))
+        for found in WITHOUT_PROVIDER.finditer(code):
+            yield Finding(
+                "appfair-module",
+                f'{name} calls .without_provider("appfair"), which takes the App Fair group out '
+                f"of the app's settings",
+                'delete the .without_provider("appfair") call',
+                path=name,
+                line=_line(code, found.start()),
+            )
+        reserved = [*RESERVED_GROUP_LITERAL.finditer(code), *reserved_path.finditer(code)]
+        if group_id_imported.search(code):
+            reserved += RESERVED_GROUP_IMPORTED.finditer(code)
+        for found in sorted(reserved, key=lambda match: match.start()):
+            yield Finding(
+                "appfair-module",
+                f'{name} declares a settings group with the id "appfair", and that id and its '
+                f"settings/appfair route belong to the App Fair group",
+                "give that group another id. The App Fair group comes from "
+                f".provider(&{crate}::APP_FAIR)",
+                path=name,
+                line=_line(code, found.start()),
+            )
+    if not passed:
+        yield Finding(
+            "appfair-module",
+            "no source under src/ passes the App Fair provider to the settings builder, so the "
+            "app's settings have no App Fair group",
+            "add this call where the app declares its settings, on the `Preferences` builder of "
+            f"day-piece-settings and before `.install()`:\n    .provider(&{crate}::APP_FAIR)",
+            path=builder[0] if builder else None,
+            line=builder[1] if builder else None,
+        )
+
+
+@rule("appfair-module", "The app builds in day-piece-appfair and shows its settings group")
+def appfair_module(project: Project) -> Iterable[Finding]:
+    """Every App Fair app carries the catalog's group in its settings.
+
+    The group comes from one crate, which the app takes from crates.io, locks in a committed
+    Cargo.lock as crates.io published it, at a release the catalog accepts, and hands to its
+    settings builder. The validation stage looks for the marker that crate leaves in the built
+    package, so a submission that fails here fails there too.
+    """
+    findings, crate = _module_manifest(project)
+    yield from findings
+    yield from _module_lock(project)
+    yield from _module_sources(project, crate)
 
 
 # --------------------------------------------------------------------------------------------

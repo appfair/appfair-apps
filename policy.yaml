@@ -181,6 +181,11 @@ release-upload:
 # --- Stage B -------------------------------------------------------------------------------
 # Reads the packages stage A built and compares them with the app's release of the same commit.
 # Nothing it reads is executed.
+#
+# It also looks for the App Fair module in each package: the bytes `day-piece-appfair/<version>`
+# in every `libdayapp.so` and in the iOS executable. The minimum version is not set here. It is
+# `APPFAIR_MODULE_MINIMUM` in .github/actions/appfair-lint/appfair_lint.py, where the lint holds
+# an app's Cargo.lock to the same number and to a crates.io entry for the crate.
 
 # Extra paths to ignore when comparing. Signature directories are already excluded.
 ignore-in-comparison:

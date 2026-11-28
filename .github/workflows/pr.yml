@@ -121,8 +121,8 @@ jobs:
           PY
 
   # The catalog's rules for an app's repository: the licence texts, the licence notice in each
-  # source file, the flavor manifest. Same action an app runs in its own CI. The checkout is full,
-  # since the rules read the sources.
+  # source file, the flavor manifest, the App Fair module. Same action an app runs in its own CI.
+  # The checkout is full, since the rules read the sources.
   lint:
     name: lint ${{ matrix.token }}
     needs: plan

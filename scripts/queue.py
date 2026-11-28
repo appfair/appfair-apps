@@ -1978,6 +1978,110 @@ def file_digest(path: Path) -> str:
     return digest.hexdigest()
 
 
+# The `appfair-module` rule of the lint names the crate every app builds in and the oldest release
+# of it the catalog accepts. The package check reads both from there, so the two agree.
+LINT = ROOT / ".github" / "actions" / "appfair-lint"
+
+# The binaries Rust is linked into, where that crate leaves `day-piece-appfair/<version>`: the
+# library of every ABI in an Android package (under `base/` in an .aab), and the main executable
+# of an iOS one. policy.yaml's `expected-differences` names the same files.
+ANDROID_APP_LIBRARY = re.compile(r"(?:base/)?lib/[^/]+/libdayapp\.so")
+
+# How many bytes of one block are searched again with the next. It covers the longest marker the
+# pattern below matches, which is 80 bytes.
+MARKER_OVERLAP = 128
+
+
+def appfair_lint():
+    """The lint's module, imported from the action's directory."""
+    if str(LINT) not in sys.path:
+        sys.path.insert(0, str(LINT))
+    import appfair_lint as lint
+
+    return lint
+
+
+def module_marker() -> re.Pattern[bytes]:
+    """The marker as it sits in a binary: the crate's name, a slash and a semver version.
+
+    The version ends at the first byte that cannot continue it. In a built app that byte is the
+    NUL the crate puts after the version, so whatever the linker places next is never read as a
+    pre-release suffix. The counts keep a match shorter than `MARKER_OVERLAP`.
+    """
+    number = rb"(?:0|[1-9]\d{0,8})"
+    return re.compile(
+        re.escape(appfair_lint().APPFAIR_MODULE.encode())
+        + rb"/(" + number + rb"\." + number + rb"\." + number + rb"(?:-[0-9A-Za-z.-]{1,32})?)"
+    )
+
+
+def module_version(stream, block_size: int = 1 << 20) -> str | None:
+    """The newest version a binary carries a marker for, or None when it carries none.
+
+    The binary is read a block at a time, since one can be tens of megabytes. The last
+    `MARKER_OVERLAP` bytes of what was read are kept and searched again with the next block, so
+    a marker lying across two blocks is found.
+    """
+    lint = appfair_lint()
+    pattern = module_marker()
+    found: set[str] = set()
+    window = b""
+    while True:
+        block = stream.read(block_size)
+        window += block
+        # A marker that starts in the bytes kept for the next block may be cut short here. It is
+        # taken from the next search, which has all of it. The last search keeps nothing back.
+        settled = len(window) - MARKER_OVERLAP if block else len(window)
+        for match in pattern.finditer(window):
+            if match.start() < settled:
+                found.add(match.group(1).decode("ascii"))
+        if not block:
+            break
+        window = window[-MARKER_OVERLAP:]
+    return max(found, key=lint.version_key) if found else None
+
+
+def module_markers(package: Path, executable: str = "") -> dict[str, str | None]:
+    """The App Fair module's marker in each binary Rust is linked into: the version it names, or
+    None for a binary without one. `executable` is the iOS bundle's `CFBundleExecutable`.
+    """
+    import zipfile
+
+    markers: dict[str, str | None] = {}
+    with zipfile.ZipFile(package) as z:
+        for name in sorted(z.namelist()):
+            if ANDROID_APP_LIBRARY.fullmatch(name) or (
+                executable and re.fullmatch(r"Payload/[^/]+\.app/" + re.escape(executable), name)
+            ):
+                with z.open(name) as fh:
+                    markers[name] = module_version(fh)
+    return markers
+
+
+def module_problems(markers: dict[str, str | None]) -> list[str]:
+    """What the markers `inspect` recorded leave wrong with a package, as the audit words it."""
+    lint = appfair_lint()
+    name, minimum = lint.APPFAIR_MODULE, lint.APPFAIR_MODULE_MINIMUM
+    if not markers:
+        return [
+            f"the package holds no libdayapp.so and no main executable, so nothing shows that it "
+            f"was built with {name}"
+        ]
+    problems = []
+    for path, version in sorted(markers.items()):
+        if version is None:
+            problems.append(
+                f"{path} carries no `{name}/<version>` marker, so the app was built without the "
+                f"App Fair module; the `appfair-module` rule of appfair-lint names what to add"
+            )
+        elif not lint.version_at_least(version, minimum):
+            problems.append(
+                f"{path} was built with {name} {version}, and the App Fair takes {minimum} or "
+                f"newer; run `cargo update -p {name}` in the app and release it again"
+            )
+    return problems
+
+
 def find_aapt2() -> str | None:
     """`aapt2` from the Android SDK, which reads an APK's binary manifest."""
     import glob
@@ -2063,8 +2167,8 @@ def apple_facts(ipa: Path) -> dict:
 
 
 def cmd_inspect(args: argparse.Namespace) -> int:
-    """Record what a package contains: every file with its digest, plus the identity and
-    permissions from its manifest.
+    """Record what a package contains: every file with its digest, the identity and permissions
+    from its manifest, and the App Fair module's marker in each of the app's binaries.
 
     The package is opened as a zip and its manifest read with aapt2 or plistlib. Nothing in it is
     executed.
@@ -2095,6 +2199,7 @@ def cmd_inspect(args: argparse.Namespace) -> int:
     else:
         Problem(package.name, f"unknown package format {fmt!r}").emit()
         return 1
+    markers = module_markers(package, str(facts.get("executable", "")))
 
     report = {
         "package": package.name,
@@ -2104,12 +2209,17 @@ def cmd_inspect(args: argparse.Namespace) -> int:
         "entries": entries,
         "executables": executables,
         "facts": facts,
+        "appfair-module": markers,
     }
     Path(args.out).write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
     print(
         f"inspected {package.name}: {len(entries)} file(s), {len(executables)} executable(s), "
         f"{len(facts.get('permissions', []))} permission(s)"
     )
+    module = appfair_lint().APPFAIR_MODULE
+    for path, version in markers.items():
+        print(f"         {path}: {module} {version or 'marker absent'}")
+    module_cell = ", ".join(f"`{path}`: {version or 'absent'}" for path, version in markers.items())
     summary = [
         f"### {package.name}",
         "",
@@ -2121,6 +2231,7 @@ def cmd_inspect(args: argparse.Namespace) -> int:
         f"| files | {len(entries)} |",
         f"| identity | `{facts.get('id', '?')}` {facts.get('version', '?')} ({facts.get('build', '?')}) |",
         f"| permissions | {', '.join(facts.get('permissions', [])) or 'none'} |",
+        f"| App Fair module | {module_cell or 'no binary to read'} |",
     ]
     write_summary(summary)
     return 0
@@ -2486,6 +2597,11 @@ def cmd_audit(args: argparse.Namespace) -> int:
         spdx = sidecars / f"{name}.sbom-spdx.json"
         if not spdx.is_file():
             bad(f"no {name}.sbom-spdx.json beside the package")
+
+    # 4. It was built with the App Fair module, in a release the catalog accepts. `inspect` read
+    #    the marker out of each binary Rust is linked into.
+    for message in module_problems(report.get("appfair-module") or {}):
+        bad(message)
 
     lines = [
         f"### Audit: {report['package']}",

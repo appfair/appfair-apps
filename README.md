@@ -40,7 +40,7 @@ that, so the pipeline splits into three jobs along that boundary.
 | stage | what it does | runs app code | holds secrets |
 |---|---|---|---|
 | **A, build** | checks the app out at the commit, lints it, packs it **unsigned** for each target | yes | no |
-| **B, validate** | reads the packages: inventory and digests, permissions against the manifest, provenance against the commit, comparison against the app's own release, virus scan | no | no |
+| **B, validate** | reads the packages: inventory and digests, permissions against the manifest, provenance against the commit, comparison against the app's own release, the App Fair module in the app's binaries, virus scan | no | no |
 | **C, sign and submit** | signs the package with the App Fair's keys, uploads it to each channel, and attaches it to the app's own release beside the maintainer's | no | yes |
 | **keep** | leaves the signed packages as a run artifact | no | no |
 | **merge** | merges the pull request and records the publication | no | no |
@@ -58,7 +58,7 @@ Stages B and C read the app's manifest, store copy and translations through a sp
 well-formed Day project: ids resolve, strings are in the catalogue, and the store listing is
 complete.
 
-**Stage B** checks five things about the package:
+**Stage B** checks six things about the package:
 
 - **Contents.** Every file, with its size and SHA-256, recorded in the run and kept as a report.
 - **Identity.** The bundle id, version and build number from the package's manifest, against the
@@ -78,6 +78,11 @@ complete.
   since another Xcode produces another `Info.plist`. Missing or ambiguous base assets, unreadable
   metadata and an identity that disagrees with the manifest fail. `compare.json` records every
   normalized, excluded and expected path.
+- **The App Fair module.** The `day-piece-appfair` crate leaves the bytes
+  `day-piece-appfair/<version>` in the compiled app, with a NUL after the version. The inspection
+  reads them out of every `libdayapp.so` of an Android package and out of the main executable of
+  an iOS one, and the audit refuses a binary without the marker or with a version below the
+  minimum. `APPFAIR_MODULE_MINIMUM` in the lint states that minimum for both checks.
 - **Safety.** ClamAV over every file, and the provenance and SBOM beside the package checked
   against the commit the submission pins. A build from a dirty checkout is refused.
 
@@ -171,8 +176,9 @@ under one id.
 ## Running the catalog's rules in an app's CI
 
 [`appfair-lint`](.github/actions/appfair-lint) checks the licence texts, the licence notice in
-every source file, and the flavor manifest. A pull request here runs it against the submitted
-commit, and an app runs the same rules on every push:
+every source file, the flavor manifest, and the App Fair module: its provider in the app's
+settings and its crates.io release in the committed `Cargo.lock`. A pull request here runs it
+against the submitted commit, and an app runs the same rules on every push:
 
 ```yaml
 - uses: actions/checkout@v7

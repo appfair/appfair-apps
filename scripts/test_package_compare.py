@@ -4,6 +4,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 import plistlib
 import sys
 import tempfile
@@ -321,6 +322,248 @@ class ComparisonTests(unittest.TestCase):
                                           "distribution": {"ios-uikit": ["apple-app-store"]}})
         self.assertTrue(any("already taken" in p.message
                             for p in queue.validate_app(mine, policy, [mine, theirs])))
+
+
+MARKER = b"day-piece-appfair/"
+
+
+def binary(*versions, size=4096):
+    """A stand-in for a compiled binary: filler, with the marker of each version a build with the
+    App Fair module leaves in it."""
+    filler = bytes(range(256)) * (size // 256)
+    return filler + b"".join(MARKER + v.encode() + b"\0" + filler for v in versions)
+
+
+class ModuleMarkerTests(unittest.TestCase):
+    """Stage B reads the App Fair module's marker out of the binaries Rust is linked into."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+
+    def package(self, name, files):
+        path = self.root / name
+        with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+            for filename, data in files.items():
+                z.writestr(filename, data)
+        return path
+
+    def ipa(self, name, executable_bytes):
+        info = plistlib.loads(plist(metadata(True)))
+        info["CFBundleExecutable"] = "FairGames"
+        return self.package(name, {
+            "Payload/FairGames.app/Info.plist": plistlib.dumps(info),
+            "Payload/FairGames.app/FairGames": executable_bytes,
+            # Neither of these is the app's main executable.
+            "Payload/FairGames.app/Frameworks/Other.framework/Other": binary("9.9.9"),
+            "Payload/FairGames.app/PlugIns/Share.appex/FairGames": binary("9.9.9"),
+        })
+
+    def run_command(self, command, **arguments):
+        """A subcommand's exit code and everything it printed, kept out of a real run's summary
+        and annotations."""
+        out = io.StringIO()
+        with patch.dict("os.environ"), contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            for name in ("GITHUB_ACTIONS", "GITHUB_STEP_SUMMARY"):
+                os.environ.pop(name, None)
+            code = command(argparse.Namespace(**arguments))
+        return code, out.getvalue()
+
+    def inspect(self, package):
+        report = self.root / "report.json"
+        code, _ = self.run_command(queue.cmd_inspect, package=str(package), sibling=None, out=str(report))
+        self.assertEqual(code, 0)
+        return json.loads(report.read_text())
+
+    def audit(self, package, target="ios-uikit"):
+        """Inspect a package, then audit the report as stage B does."""
+        self.inspect(package)
+        meta = self.root / "metadata.json"
+        meta.write_text(json.dumps(metadata(True)))
+        app = queue.App(self.root / "Faire-Games.yaml", {
+            "token": "Faire-Games", "title": "Fair Games", "tag": "v1.9.0", "commit": "a" * 40,
+            "distribution": {"ios-uikit": ["apple-app-store"], "android-material": ["google-play-store"]}})
+        with patch.object(queue, "catalog", return_value=[app]):
+            return self.run_command(
+                queue.cmd_audit, app="Faire-Games", report=str(self.root / "report.json"),
+                metadata=str(meta), target=target, sidecars=None, expect_commit=None)
+
+    def test_a_marker_is_read_from_any_block_size(self):
+        data = binary("0.1.12")
+        for block_size in (1, 2, 3, 7, 17, 18, 19, 64, 127, 128, 129, 1000, len(data), 1 << 20):
+            with self.subTest(block_size=block_size):
+                self.assertEqual(queue.module_version(io.BytesIO(data), block_size), "0.1.12")
+        self.assertIsNone(queue.module_version(io.BytesIO(binary())))
+        self.assertIsNone(queue.module_version(io.BytesIO(b"")))
+
+    def test_a_binary_is_never_read_whole(self):
+        class Counted(io.BytesIO):
+            asked: list = []
+
+            def read(self, size=-1):
+                self.asked.append(size)
+                return super().read(size)
+
+        stream = Counted(binary("0.1.0", size=1 << 16))
+        self.assertEqual(queue.module_version(stream, 4096), "0.1.0")
+        self.assertEqual(set(stream.asked), {4096})
+        self.assertGreater(len(stream.asked), 16)
+
+    def test_a_marker_lying_across_two_blocks_is_read_whole(self):
+        # Every block boundary falls on every byte of the marker in turn, the digits of the
+        # version included: `0.1.12` cut after `0.1.1` is still 0.1.12, and a pre-release cut
+        # before or inside its suffix is still that pre-release.
+        for version in ("0.1.12", "1.0.0-rc.1"):
+            marker = MARKER + version.encode()
+            for block_size, leads in ((64, range(420)), (100, range(420)), (128, range(420)),
+                                      (129, range(420)), (1, range(0, 300, 13)), (7, range(0, 300, 5))):
+                for lead in leads:
+                    with self.subTest(version=version, block_size=block_size, lead=lead):
+                        data = b"\0" * lead + marker + b"\0" * 300
+                        self.assertEqual(queue.module_version(io.BytesIO(data), block_size), version)
+                        # And as the last bytes of the file, with nothing after the version.
+                        ending = io.BytesIO(data[:lead + len(marker)])
+                        self.assertEqual(queue.module_version(ending, block_size), version)
+
+    def test_the_overlap_covers_the_longest_marker(self):
+        longest = MARKER + b"999999999.999999999.999999999-" + b"a" * 32
+        self.assertLessEqual(len(longest), queue.MARKER_OVERLAP)
+        self.assertEqual(queue.module_marker().fullmatch(longest).end(), len(longest))
+        for lead in range(0, 200, 7):
+            data = b"\0" * lead + longest + b"\0" * 300
+            self.assertEqual(queue.module_version(io.BytesIO(data), 100), longest[len(MARKER):].decode())
+
+    def test_the_version_ends_at_the_nul_the_crate_puts_after_it(self):
+        # What a built app holds: the marker, the NUL the crate ends it with, and whatever the
+        # linker placed next. None of what follows the NUL is read into the version.
+        followers = (b"-junk", b"-rc.9", b".5", b"7", b"+build.1", b"/rustc/0ef1bc386059596d")
+        for version in ("0.1.0", "0.1.0-rc.1", "1.2.3"):
+            for after in followers:
+                with self.subTest(version=version, after=after):
+                    data = binary() + MARKER + version.encode() + b"\0" + after + binary()
+                    self.assertEqual(queue.module_version(io.BytesIO(data)), version)
+        # With a block boundary on each byte of the marker, the NUL and the bytes after it.
+        marker = MARKER + b"0.1.0\0-junk"
+        for lead in range(130):
+            with self.subTest(lead=lead):
+                data = b"\xff" * lead + marker + b"\xff" * 200
+                self.assertEqual(queue.module_version(io.BytesIO(data), 64), "0.1.0")
+        # The package check then takes the version for what it is: the minimum, and no
+        # pre-release of it.
+        package = self.ipa("fair-games-ios-uikit.ipa", binary() + marker + binary())
+        self.assertEqual(self.inspect(package)["appfair-module"], {"Payload/FairGames.app/FairGames": "0.1.0"})
+        code, output = self.audit(package)
+        self.assertEqual(code, 0, output)
+
+    def test_any_byte_that_cannot_continue_a_version_ends_it(self):
+        # A literal the linker placed straight after the version, as in a build of the crate
+        # before it wrote the NUL.
+        for after in (b"DAY_SCRIPTappfair", b"day_piece_appfair", b" (demo)", b"\n", b"/", b"_1", b"\xff"):
+            with self.subTest(after=after):
+                data = binary() + MARKER + b"0.1.0" + after + binary()
+                self.assertEqual(queue.module_version(io.BytesIO(data)), "0.1.0")
+        # Build metadata is not part of a version's order.
+        self.assertEqual(queue.module_version(io.BytesIO(MARKER + b"0.1.0+build.7")), "0.1.0")
+        # A hyphen does continue a version, as a pre-release, which is what the NUL rules out.
+        self.assertEqual(queue.module_version(io.BytesIO(MARKER + b"0.1.0-junk")), "0.1.0-junk")
+        self.assertEqual(queue.module_version(io.BytesIO(MARKER + b"0.1.0\0-junk")), "0.1.0")
+
+    def test_only_a_version_after_the_name_is_a_marker(self):
+        paths = (b"/checkout/day-piece-appfair/src/lib.rs\0"
+                 b"/registry/src/day-piece-appfair-0.1.0/src/lib.rs\0"
+                 # Cargo's build directory for the crate, which its generated sources name.
+                 b"/target/debug/build/day-piece-appfair/605c3b6417ec69b6/out\0"
+                 b"day-piece-appfair/\0day-piece-appfair/0.1\0day_piece_appfair/0.1.0\0")
+        self.assertIsNone(queue.module_version(io.BytesIO(binary() + paths)))
+        # With two releases linked in, the newest is the one the package is held to.
+        self.assertEqual(queue.module_version(io.BytesIO(binary("0.1.0", "0.2.3", "0.2.3-rc.1"))), "0.2.3")
+        self.assertEqual(queue.module_version(io.BytesIO(binary("0.10.0", "0.9.0"))), "0.10.0")
+
+    def test_inspect_records_the_marker_of_every_abi(self):
+        aab = self.package("fair-games-android-material.aab", {
+            "base/lib/arm64-v8a/libdayapp.so": binary("0.1.0"),
+            "base/lib/armeabi-v7a/libdayapp.so": binary("0.1.0"),
+            "base/lib/x86_64/libdayapp.so": binary(),
+            # Another library's bytes say nothing about the app's.
+            "base/lib/arm64-v8a/libother.so": binary("0.1.0"),
+            "base/dex/classes.dex": b"dex",
+        })
+        self.assertEqual(self.inspect(aab)["appfair-module"], {
+            "base/lib/arm64-v8a/libdayapp.so": "0.1.0",
+            "base/lib/armeabi-v7a/libdayapp.so": "0.1.0",
+            "base/lib/x86_64/libdayapp.so": None,
+        })
+        # An .apk carries the same libraries without the module directory.
+        apk = self.package("fair-games.apk", {"lib/arm64-v8a/libdayapp.so": binary("0.3.1")})
+        self.assertEqual(queue.module_markers(apk), {"lib/arm64-v8a/libdayapp.so": "0.3.1"})
+
+    def test_inspect_reads_the_ios_executable_the_bundle_names(self):
+        report = self.inspect(self.ipa("fair-games-ios-uikit.ipa", binary("0.1.0")))
+        self.assertEqual(report["appfair-module"], {"Payload/FairGames.app/FairGames": "0.1.0"})
+
+    def test_the_audit_passes_a_package_built_with_the_module(self):
+        minimum = queue.appfair_lint().APPFAIR_MODULE_MINIMUM
+        for version in (minimum, "0.1.1", "1.0.0"):
+            with self.subTest(version=version):
+                code, output = self.audit(self.ipa("fair-games-ios-uikit.ipa", binary(version)))
+                self.assertEqual(code, 0, output)
+
+    def test_the_audit_refuses_a_package_built_without_the_module(self):
+        code, output = self.audit(self.ipa("fair-games-ios-uikit.ipa", binary()))
+        self.assertEqual(code, 1)
+        self.assertIn("Payload/FairGames.app/FairGames carries no `day-piece-appfair/<version>` marker", output)
+        self.assertIn("appfair-module", output)
+
+    def test_the_audit_refuses_a_module_older_than_the_lint_s_minimum(self):
+        code, output = self.audit(self.ipa("fair-games-ios-uikit.ipa", binary("0.0.9")))
+        self.assertEqual(code, 1)
+        self.assertIn("was built with day-piece-appfair 0.0.9", output)
+        self.assertIn("takes 0.1.0 or newer", output)
+        # The minimum is the lint's constant, so raising that one line raises both checks.
+        package = self.ipa("fair-games-ios-uikit.ipa", binary("0.1.5"))
+        self.assertEqual(self.audit(package)[0], 0)
+        with patch.object(queue.appfair_lint(), "APPFAIR_MODULE_MINIMUM", "0.2.0"):
+            code, output = self.audit(package)
+        self.assertEqual(code, 1)
+        self.assertIn("takes 0.2.0 or newer", output)
+
+    def test_every_abi_has_to_carry_the_module(self):
+        good = {"base/lib/arm64-v8a/libdayapp.so": "0.1.0", "base/lib/x86_64/libdayapp.so": "0.2.0"}
+        self.assertEqual(queue.module_problems(good), [])
+        one_missing = queue.module_problems({**good, "base/lib/x86_64/libdayapp.so": None})
+        self.assertEqual(len(one_missing), 1)
+        self.assertIn("base/lib/x86_64/libdayapp.so carries no", one_missing[0])
+        one_old = queue.module_problems({**good, "base/lib/arm64-v8a/libdayapp.so": "0.1.0-rc.1"})
+        self.assertEqual(len(one_old), 1)
+        self.assertIn("base/lib/arm64-v8a/libdayapp.so was built with day-piece-appfair 0.1.0-rc.1", one_old[0])
+        self.assertEqual(len(queue.module_problems({path: None for path in good})), 2)
+
+    def test_a_package_with_no_binary_to_read_is_refused(self):
+        self.assertIn("holds no libdayapp.so and no main executable", queue.module_problems({})[0])
+        # An .aab with its library under another name, and a report written before this check.
+        aab = self.package("fair-games-android-material.aab", {"base/lib/arm64-v8a/libapp.so": binary("0.1.0")})
+        self.assertEqual(self.inspect(aab)["appfair-module"], {})
+        report = self.root / "report.json"
+        facts = {"id": "org.appfair.app.Faire_Games", "version": "1.9.0", "build": "36", "permissions": []}
+        report.write_text(json.dumps({"package": aab.name, "facts": facts}))
+        meta = self.root / "metadata.json"
+        meta.write_text(json.dumps(metadata(True)))
+        app = queue.App(self.root / "Faire-Games.yaml", {"token": "Faire-Games"})
+        with patch.object(queue, "catalog", return_value=[app]):
+            code, output = self.run_command(
+                queue.cmd_audit, app="Faire-Games", report=str(report), metadata=str(meta),
+                target="android-material", sidecars=None, expect_commit=None)
+        self.assertEqual(code, 1)
+        self.assertIn("holds no libdayapp.so and no main executable", output)
+        # The same report with a marker for its one library passes, so nothing else failed it.
+        report.write_text(json.dumps({"package": aab.name, "facts": facts,
+                                      "appfair-module": {"base/lib/arm64-v8a/libdayapp.so": "0.1.0"}}))
+        with patch.object(queue, "catalog", return_value=[app]):
+            code, output = self.run_command(
+                queue.cmd_audit, app="Faire-Games", report=str(report), metadata=str(meta),
+                target="android-material", sidecars=None, expect_commit=None)
+        self.assertEqual(code, 0, output)
 
 
 if __name__ == "__main__":
