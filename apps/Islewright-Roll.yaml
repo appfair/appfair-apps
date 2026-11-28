@@ -1,0 +1,24 @@
+# yaml-language-server: $schema=../schema/app.schema.json
+#
+# Islewright: Roll in the App Fair catalog. The file is named for the app token, which is where
+# the app lives: https://github.com/Islewright-Roll/Islewright-Roll
+#
+# To publish a new version, change the tag and the commit below in a pull request. The rest is
+# read from the app's repository at that commit.
+
+token: Islewright-Roll
+title: "Islewright: Roll"
+tag: v3.0.6
+# The commit that tag points at. Since a tag can be moved afterwards, this is what every stage
+# checks out. `scripts/queue.py update Islewright-Roll` rewrites both lines.
+commit: e31824d44b71b9d43dfb00b4b8c9f24a0165ded2
+summary: A solitaire dice game of building on a small island, offline.
+id: org.appfair.app.IslewrightRoll
+
+# Where this app goes, keyed by the target that builds for it. policy.yaml lists the channels the
+# queue can publish to. Drop a line to keep the app off a channel.
+distribution:
+  android-material:
+    - google-play-store
+  ios-uikit:
+    - apple-app-store
